@@ -1,0 +1,142 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-autoclipper}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-autoclipper}
+      POSTGRES_DB: ${POSTGRES_DB:-autoclipper}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-autoclipper}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-autoclipper}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-autoclipper123}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://autoclipper:autoclipper@postgres:5432/autoclipper}
+      # Windows bind-mount mtimes don't always change enough for Python's .pyc cache
+      # invalidation to notice an edit, so a restart can silently keep serving stale bytecode
+      # (seen firsthand: a bugfix restarted cleanly but the old behavior persisted). Not
+      # writing bytecode at all removes the whole failure mode; dev-only cost is negligible.
+      PYTHONDONTWRITEBYTECODE: "1"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+  worker:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://autoclipper:autoclipper@postgres:5432/autoclipper}
+      # Windows bind-mount mtimes don't always change enough for Python's .pyc cache
+      # invalidation to notice an edit, so a restart can silently keep serving stale bytecode
+      # (seen firsthand: a bugfix restarted cleanly but the old behavior persisted). Not
+      # writing bytecode at all removes the whole failure mode; dev-only cost is negligible.
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+
+  beat:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://autoclipper:autoclipper@postgres:5432/autoclipper}
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.workers.celery_app beat --loglevel=info
+
+  flower:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+      - worker
+    command: celery -A app.workers.celery_app flower --port=5555
+    profiles:
+      - monitoring
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - backend
+    command: npm run dev
+
+volumes:
+  postgres_data:
+  minio_data:

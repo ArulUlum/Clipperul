@@ -1,0 +1,28 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+email-validator==2.2.0
+sqlalchemy==2.0.36
+psycopg[binary]==3.2.3
+alembic==1.14.0
+celery==5.4.0
+redis==5.2.1
+sse-starlette==2.2.1
+python-multipart==0.0.20
+python-jose[cryptography]==3.3.0
+bcrypt==4.2.1
+cryptography==44.0.0
+boto3==1.35.90
+slowapi==0.1.9
+faster-whisper==1.1.1
+requests==2.32.3
+# yt-dlp needs frequent updates to keep working against YouTube's changes — pinned with a
+# floor, not an exact version, so a plain rebuild picks up fixes instead of silently rotting.
+yt-dlp>=2026.8.19
+openai==1.59.6
+anthropic==0.42.0
+opencv-python-headless==4.10.0.84
+numpy==2.2.1
+pydub==0.25.1
+python-dotenv==1.0.1
