@@ -52,7 +52,9 @@ class Settings(BaseSettings):
     AI_LLM_PROVIDER: Literal["openai", "anthropic", "ollama", "gemini"] = "openai"
     OPENAI_API_KEY: str | None = None
     OPENAI_MODEL: str = "gpt-4o-mini"
-    OPENAI_BASE_URL: str = "http://localhost:20128/v1"
+    # Optional: point the OpenAI client at any OpenAI-compatible endpoint (a router/proxy such as
+    # 9router, a self-hosted gateway...). Unset = the official OpenAI API.
+    OPENAI_BASE_URL: str | None = None
     ANTHROPIC_API_KEY: str | None = None
     ANTHROPIC_MODEL: str = "claude-sonnet-5"
     # Ollama running on the Windows host (outside Docker) — Docker Desktop resolves

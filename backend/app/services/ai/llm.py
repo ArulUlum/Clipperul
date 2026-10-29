@@ -35,7 +35,7 @@ class OpenAIProvider(LLMProvider):
 
             self._client = OpenAI(
                 api_key=settings.OPENAI_API_KEY,
-                base_url=settings.OPENAI_BASE_URL,
+                base_url=settings.OPENAI_BASE_URL or "https://api.openai.com/v1",
                 timeout=60.0
             )
         return self._client
