@@ -47,18 +47,12 @@ class Settings(BaseSettings):
     # Upload limits
     MAX_UPLOAD_SIZE_BYTES: int = 5 * 1024 * 1024 * 1024  # 5 GB
     ALLOWED_VIDEO_EXTENSIONS: set[str] = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
-    ALLOWED_VIDEO_MIME_TYPES: set[str] = {
-        "video/mp4",
-        "video/quicktime",
-        "video/x-matroska",
-        "video/webm",
-        "video/x-msvideo",
-    }
 
     # AI providers
     AI_LLM_PROVIDER: Literal["openai", "anthropic", "ollama", "gemini"] = "openai"
     OPENAI_API_KEY: str | None = None
     OPENAI_MODEL: str = "gpt-4o-mini"
+    OPENAI_BASE_URL: str = "http://localhost:20128/v1"
     ANTHROPIC_API_KEY: str | None = None
     ANTHROPIC_MODEL: str = "claude-sonnet-5"
     # Ollama running on the Windows host (outside Docker) — Docker Desktop resolves
@@ -95,10 +89,15 @@ class Settings(BaseSettings):
     YOUTUBE_CLIENT_ID: str | None = None
     YOUTUBE_CLIENT_SECRET: str | None = None
     # From TikTok for Developers (developers.tiktok.com) > your app > Login Kit, with the
-    # redirect URI registered as {BACKEND_BASE_URL}{API_PREFIX}/social-accounts/tiktok/callback.
-    # Note TikTok calls the app identifier a "Client Key", not "Client ID".
+    # redirect URI registered as {TIKTOK_REDIRECT_BASE_URL or BACKEND_BASE_URL}{API_PREFIX}/
+    # social-accounts/tiktok/callback. Note TikTok calls the app identifier a "Client Key", not
+    # "Client ID".
     TIKTOK_CLIENT_KEY: str | None = None
     TIKTOK_CLIENT_SECRET: str | None = None
+    # Optional: origin used ONLY for TikTok's redirect URI. TikTok requires https://, so local dev
+    # sets this to an ngrok URL while BACKEND_BASE_URL stays http://localhost:8000 for
+    # YouTube (Google accepts localhost). Unset = TikTok also uses BACKEND_BASE_URL.
+    TIKTOK_REDIRECT_BASE_URL: str | None = None
     # From developers.facebook.com > your app > Instagram > API setup with Instagram business
     # login. Redirect URI must be registered as exactly
     # {BACKEND_BASE_URL}{API_PREFIX}/social-accounts/instagram/callback. Meta calls these

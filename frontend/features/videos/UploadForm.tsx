@@ -128,7 +128,7 @@ export function UploadForm() {
       )}
 
       <p className="text-xs text-muted-foreground">
-        AutoClipper watches the transcript and automatically detects whether this is Gaming or
+        Clipperul watches the transcript and automatically detects whether this is Gaming or
         Podcast content, then picks the matching highlight-detection strategy — no need to
         choose a category.
       </p>

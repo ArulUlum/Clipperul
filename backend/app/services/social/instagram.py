@@ -5,7 +5,7 @@ from uuid import UUID
 import requests
 
 from app.core.config import settings
-from app.services.social.provider import AccountInfo, PublishResult, SocialMediaProvider
+from app.services.social.provider import AccountInfo, ProgressCallback, PublishResult, SocialMediaProvider
 
 _AUTH_URL = "https://www.instagram.com/oauth/authorize"
 # Short-lived token exchange — this is the only step that isn't graph.instagram.com; Meta
@@ -146,7 +146,14 @@ class InstagramProvider(SocialMediaProvider):
         finally:
             db.close()
 
-    def publish_video(self, social_account_id: UUID, video_path: str, title: str, caption: str) -> PublishResult:
+    def publish_video(
+        self,
+        social_account_id: UUID,
+        video_path: str,
+        title: str,
+        caption: str,
+        on_progress: ProgressCallback | None = None,
+    ) -> PublishResult:
         raise NotImplementedError(
             "Instagram publishing needs the instagram_business_content_publish permission to "
             "pass Meta's App Review (Advanced Access) — implemented in Phase 4"

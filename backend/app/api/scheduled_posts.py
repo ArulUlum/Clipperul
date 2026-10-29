@@ -1,8 +1,9 @@
+import uuid
 from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
@@ -121,9 +122,10 @@ def create_scheduled_post(
         # doesn't have to wait for a due-post scan that only runs once a minute.
         for post in posts:
             post.status = ScheduledPostStatus.PROCESSING
+            post.run_token = uuid.uuid4().hex
         db.commit()
         for post in posts:
-            publish_scheduled_post_task.delay(str(post.id))
+            publish_scheduled_post_task.delay(str(post.id), post.run_token)
 
     return [build_scheduled_post_response(post, clip, account) for post, account in zip(posts, accounts)]
 
@@ -163,19 +165,67 @@ def update_scheduled_post(
     return build_scheduled_post_response(post, clip, social_account)
 
 
+_CANCELLABLE = (ScheduledPostStatus.SCHEDULED, ScheduledPostStatus.PROCESSING, ScheduledPostStatus.UPLOADING)
+_RETRYABLE = (ScheduledPostStatus.FAILED, ScheduledPostStatus.CANCELLED)
+
+
 @router.delete("/{post_id}", status_code=status.HTTP_204_NO_CONTENT)
 def cancel_scheduled_post(post_id: UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Cancels a still-pending post — the row is kept (status flips to CANCELLED) rather than
-    deleted, so it stays visible in history instead of silently disappearing. Once the
-    dispatcher has claimed it (PROCESSING/UPLOADING) it's too late to cancel: the publish
-    attempt is already in flight."""
+    """Cancels a post at any point before it's published — still scheduled, being prepared,
+    waiting out an automatic retry, or mid-upload. The row is kept (status CANCELLED) so it stays
+    visible and can be retried by hand. Clearing `run_token` is what actually stops the work: an
+    upload in flight notices at its next chunk, and a retry already queued with the old token
+    stands down when it fires — so cancelling also ends the automatic retrying."""
     post = _get_owned_post(db, post_id, current_user.id)
     if post is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scheduled post not found")
-    if post.status != ScheduledPostStatus.SCHEDULED:
+
+    # Conditional UPDATE rather than set-then-commit: if the worker publishes it in the same
+    # instant, this matches no row and the (already-published) post is left alone.
+    result = db.execute(
+        update(ScheduledPost)
+        .where(ScheduledPost.id == post.id, ScheduledPost.status.in_(_CANCELLABLE))
+        .values(status=ScheduledPostStatus.CANCELLED, run_token=None, progress=0)
+    )
+    db.commit()
+    if result.rowcount == 0:
+        db.refresh(post)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Can't cancel a post that's already {post.status.value.lower()}",
         )
-    post.status = ScheduledPostStatus.CANCELLED
+
+
+@router.post("/{post_id}/retry", response_model=ScheduledPostResponse, status_code=status.HTTP_202_ACCEPTED)
+def retry_scheduled_post(post_id: UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Manually re-runs a FAILED or CANCELLED post right away. It starts a fresh attempt chain
+    (new run_token, so automatic retries apply again from the first backoff step) and ignores
+    the original scheduled time — for a cancelled post that was still waiting for its slot, this
+    means "post it now"."""
+    post = _get_owned_post(db, post_id, current_user.id)
+    if post is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scheduled post not found")
+    if post.status not in _RETRYABLE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only a failed or cancelled post can be retried",
+        )
+
+    clip = ClipRepository(db).get_for_user(post.clip_id, current_user.id)
+    social_account = db.get(SocialAccount, post.social_account_id)
+    if clip is None or social_account is None or clip.status != ClipStatus.READY or not clip.storage_key:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Clip isn't ready to publish")
+
+    token = uuid.uuid4().hex
+    result = db.execute(
+        update(ScheduledPost)
+        .where(ScheduledPost.id == post.id, ScheduledPost.status.in_(_RETRYABLE))
+        .values(status=ScheduledPostStatus.PROCESSING, progress=0, run_token=token)
+    )
     db.commit()
+    if result.rowcount == 0:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This post was just changed — refresh and retry")
+
+    publish_scheduled_post_task.delay(str(post.id), token)
+    db.refresh(post)
+    return build_scheduled_post_response(post, clip, social_account)

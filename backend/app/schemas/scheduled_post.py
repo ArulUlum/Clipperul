@@ -53,6 +53,7 @@ class ScheduledPostResponse(BaseModel):
     account_name: str
     scheduled_at: datetime
     status: ScheduledPostStatus
+    progress: int
     title: str
     caption: str | None
     published_at: datetime | None
@@ -80,6 +81,7 @@ def build_scheduled_post_response(
         account_name=social_account.account_name,
         scheduled_at=post.scheduled_at,
         status=post.status,
+        progress=post.progress or 0,
         title=post.title,
         caption=post.caption,
         published_at=post.published_at,

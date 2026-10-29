@@ -117,10 +117,12 @@ class VideoCategoryStrategy(ABC):
         batch_size = max(1, settings.HIGHLIGHT_CANDIDATES_PER_LLM_CALL)
         highlights: list[HighlightCandidate] = []
         for i in range(0, len(candidates), batch_size):
-            highlights.extend(self._score_batch(candidates[i : i + batch_size], llm))
+            highlights.extend(self._score_batch(candidates[i : i + batch_size], llm, analysis.language))
         return highlights
 
-    def _score_batch(self, batch: list[_CandidateWindow], llm: LLMProvider) -> list[HighlightCandidate]:
+    def _score_batch(
+        self, batch: list[_CandidateWindow], llm: LLMProvider, language: str | None = None
+    ) -> list[HighlightCandidate]:
         candidate_payload = [
             {
                 "start": round(c.start, 2),
@@ -134,7 +136,20 @@ class VideoCategoryStrategy(ABC):
             for c in batch
         ]
 
+        language_instruction = (
+            f"Write every text field ('text' and 'reason') in the SAME language as the transcript "
+            f"excerpts below — they are in language code '{language}'. Do not translate to English "
+            f"or any other language, even though these instructions are written in English.\n\n"
+            if language
+            else (
+                "Write every text field ('text' and 'reason') in the SAME language the transcript "
+                "excerpts below are written in — do not translate to English, even though these "
+                "instructions are written in English.\n\n"
+            )
+        )
+
         user_prompt = (
+            language_instruction +
             "Here are candidate windows from ONE PART of a video's transcript (other parts are scored "
             "separately), each with a transcript excerpt and heuristic hint scores (0-1, higher = more "
             "likely to be a strong highlight for this category — informational only, not something to "
@@ -159,7 +174,8 @@ class VideoCategoryStrategy(ABC):
             "score them low rather than omitting them, unless they're pure filler with nothing usable).\n\n"
             "Prefer start/end times that align to natural sentence/thought boundaries in the transcript "
             "over the exact window edges, so the clip doesn't cut off mid-sentence. Write 'reason' as "
-            "one natural-language sentence describing what actually happens in that moment. 'reason' "
+            "one natural-language sentence, IN THE TRANSCRIPT'S OWN LANGUAGE, describing what actually "
+            "happens in that moment. 'reason' "
             "must never be a field/variable name, a bare number, or the word 'score' — always a real "
             "sentence grounded in the transcript. Estimate your confidence (0-1).\n\n"
             "Every 'reason' must quote or closely paraphrase a specific word, phrase, or number that "

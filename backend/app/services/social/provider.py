@@ -1,7 +1,11 @@
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
+
+# Called with the upload's completion percentage (0-100) as bytes reach the platform.
+ProgressCallback = Callable[[float], None]
 
 
 @dataclass
@@ -47,7 +51,16 @@ class SocialMediaProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def publish_video(self, social_account_id: UUID, video_path: str, title: str, caption: str) -> PublishResult:
+    def publish_video(
+        self,
+        social_account_id: UUID,
+        video_path: str,
+        title: str,
+        caption: str,
+        on_progress: ProgressCallback | None = None,
+    ) -> PublishResult:
+        """`on_progress`, if given, is called as the upload advances — adapters that can't
+        observe their own upload progress may simply never call it."""
         raise NotImplementedError
 
     @abstractmethod

@@ -1,4 +1,3 @@
-// Scheduler UI (calendar view, reschedule/cancel/publish-now controls) ships in Phase 4.
-// The Scheduled Posts and Published pages currently render a placeholder —
-// see app/(dashboard)/scheduled-posts and app/(dashboard)/published.
+// Posting/scheduling UI lives in features/scheduled-posts (the clip editor's "Post" tab) and
+// the Published page (app/(dashboard)/published) lists every post across clips.
 export {};

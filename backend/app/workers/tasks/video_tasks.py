@@ -183,6 +183,7 @@ def process_video(self, job_id: str) -> None:
             transcript_segments=transcription.segments,
             audio_energy=audio_energy,
             scene_changes=scene_changes,
+            language=transcription.language,
         )
 
         _emit_status(video, job, db, stage=VideoStatus.FINDING_HIGHLIGHTS, job_status=JobStatus.RUNNING)

@@ -6,19 +6,25 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { ClipPostPanel } from "@/features/scheduled-posts/ClipPostPanel";
 import { api, ApiError, getVideoDownloadUrl } from "@/lib/api";
 import useSWR from "@/lib/useSWR";
 import type { AspectRatio, Clip, SubtitlePreset, TranscriptSegment } from "@/types";
 
 const POLL_MS = 3000;
-type EditorTab = "trim" | "ratio" | "crop" | "subtitles" | "details";
+type EditorTab = "trim" | "ratio" | "crop" | "subtitles" | "details" | "post";
 const TABS: { id: EditorTab; label: string }[] = [
   { id: "trim", label: "Trim" },
   { id: "ratio", label: "Ratio" },
   { id: "crop", label: "Crop" },
   { id: "subtitles", label: "Subtitles" },
   { id: "details", label: "Details" },
+  { id: "post", label: "Post" },
 ];
+const DEFAULT_FONT_SIZE = 44;
+const DEFAULT_SUB_X = 50;
+const DEFAULT_SUB_Y = 80;
+const near = (a: number, b: number) => Math.abs(a - b) < 0.01;
 const ASPECT_RATIO_OPTIONS: AspectRatio[] = ["9:16", "3:4", "1:1", "4:3"];
 const ASPECT_RATIO_CSS: Record<AspectRatio, string> = {
   "9:16": "9/16", "3:4": "3/4", "1:1": "1/1", "4:3": "4/3", "16:9": "16/9",
@@ -60,9 +66,14 @@ export function ClipPreviewModal({
   const [cropY, setCropY] = useState(clip.crop_y ?? 50);
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(clip.subtitle_preset_id !== null);
   const [subtitlePresetId, setSubtitlePresetId] = useState(clip.subtitle_preset_id ?? "");
-  const [fontSize, setFontSize] = useState(clip.subtitle_font_size ?? 44);
-  const [subPositionX, setSubPositionX] = useState(clip.subtitle_position_x ?? 50);
-  const [subPositionY, setSubPositionY] = useState(clip.subtitle_position_y ?? 80);
+  const [fontSize, setFontSize] = useState(clip.subtitle_font_size ?? DEFAULT_FONT_SIZE);
+  const [subPositionX, setSubPositionX] = useState(clip.subtitle_position_x ?? DEFAULT_SUB_X);
+  const [subPositionY, setSubPositionY] = useState(clip.subtitle_position_y ?? DEFAULT_SUB_Y);
+
+  // The last server-confirmed state of this clip. The `clip` prop goes stale after a save
+  // (parents don't re-pass it), so "do the on-screen edits differ from what's rendered?"
+  // — which the Post tab needs — has to be measured against this instead.
+  const [savedClip, setSavedClip] = useState(clip);
 
   const [applying, setApplying] = useState(clip.status === "RENDERING");
   const [applyError, setApplyError] = useState<string | null>(null);
@@ -101,6 +112,7 @@ export function ClipPreviewModal({
       const updated = await api.get<Clip>(`/clips/${clip.id}`);
       if (updated.status === "READY") {
         setApplying(false);
+        setSavedClip(updated);
         onSaved(updated);
       } else if (updated.status === "FAILED") {
         setApplying(false);
@@ -189,6 +201,34 @@ export function ClipPreviewModal({
     }
   };
 
+  const savedCropOverride = savedClip.crop_x !== null && savedClip.crop_y !== null;
+  const cropDirty =
+    cropOverride !== savedCropOverride ||
+    (cropOverride && (!near(cropX, savedClip.crop_x ?? 50) || !near(cropY, savedClip.crop_y ?? 50)));
+  const subtitlesDirty =
+    subtitlesEnabled !== (savedClip.subtitle_preset_id !== null) ||
+    (subtitlesEnabled &&
+      (subtitlePresetId !== savedClip.subtitle_preset_id ||
+        !near(fontSize, savedClip.subtitle_font_size ?? DEFAULT_FONT_SIZE) ||
+        !near(subPositionX, savedClip.subtitle_position_x ?? DEFAULT_SUB_X) ||
+        !near(subPositionY, savedClip.subtitle_position_y ?? DEFAULT_SUB_Y)));
+  const hasUnsavedEdits =
+    !near(trimStart, savedClip.start_time) ||
+    !near(trimEnd, savedClip.end_time) ||
+    aspectRatio !== savedClip.aspect_ratio ||
+    cropDirty ||
+    subtitlesDirty;
+
+  // A post always uploads the clip's last RENDERED file, not what the live preview shows, so
+  // posting with pending edits would silently publish the old version.
+  const postBlockedReason = applying
+    ? "Your edits are still rendering — wait for them to finish, then post."
+    : hasUnsavedEdits
+      ? "You have edits that aren't saved yet. Click “Save edits” first so the post uses the edited version."
+      : savedClip.status !== "READY"
+        ? "This clip isn't ready to post (its last render didn't finish)."
+        : null;
+
   const previewScale = PREVIEW_WIDTH_PX / ASPECT_RATIO_REF_WIDTH[aspectRatio];
   const activeCueText = useMemo(() => {
     if (!subtitlesEnabled || !transcript?.segments) return null;
@@ -274,7 +314,7 @@ export function ClipPreviewModal({
             ))}
           </div>
 
-          <div className="min-h-[220px] flex-1 py-4">
+          <div className="min-h-[220px] flex-auto shrink-0 py-4">
             {activeTab === "trim" && (
               <div className="space-y-2">
                 <div className="space-y-1">
@@ -487,6 +527,15 @@ export function ClipPreviewModal({
                   </Button>
                 </div>
               </div>
+            )}
+
+            {activeTab === "post" && (
+              <ClipPostPanel
+                clipId={clip.id}
+                defaultTitle={title}
+                defaultCaption={caption}
+                blockedReason={postBlockedReason}
+              />
             )}
           </div>
 

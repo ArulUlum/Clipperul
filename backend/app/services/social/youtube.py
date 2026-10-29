@@ -6,7 +6,7 @@ from uuid import UUID
 import requests
 
 from app.core.config import settings
-from app.services.social.provider import AccountInfo, PublishResult, SocialMediaProvider
+from app.services.social.provider import AccountInfo, ProgressCallback, PublishResult, SocialMediaProvider
 
 _AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -20,6 +20,9 @@ _SCOPES = " ".join(
 )
 _REQUEST_TIMEOUT = 30
 _UPLOAD_TIMEOUT = 1800  # video PUT can legitimately take a while on a slow connection
+# Must be a multiple of 256 KiB (YouTube's resumable protocol) — 1 MiB keeps progress updates
+# frequent enough for a clip-sized file to move the bar in small steps.
+_UPLOAD_CHUNK_SIZE = 4 * 256 * 1024
 
 
 class YouTubeProvider(SocialMediaProvider):
@@ -143,7 +146,54 @@ class YouTubeProvider(SocialMediaProvider):
         finally:
             db.close()
 
-    def publish_video(self, social_account_id: UUID, video_path: str, title: str, caption: str) -> PublishResult:
+    def _upload_in_chunks(
+        self, upload_url: str, video_path: str, file_size: int, on_progress: ProgressCallback | None
+    ) -> dict:
+        """Sends the file through YouTube's resumable-upload protocol one chunk at a time
+        (rather than one giant PUT) so progress is observable: each non-final chunk is answered
+        with 308 + a `Range` header saying how much the server actually has, which is both the
+        progress signal and where the next chunk must start."""
+        offset = 0
+        stalls = 0
+        with open(video_path, "rb") as f:
+            while True:
+                f.seek(offset)
+                chunk = f.read(_UPLOAD_CHUNK_SIZE)
+                response = requests.put(
+                    upload_url,
+                    headers={
+                        "Content-Type": "video/mp4",
+                        "Content-Length": str(len(chunk)),
+                        "Content-Range": f"bytes {offset}-{offset + len(chunk) - 1}/{file_size}",
+                    },
+                    data=chunk,
+                    timeout=_UPLOAD_TIMEOUT,
+                    # 308 here means "resume incomplete", not a redirect — it carries no Location.
+                    allow_redirects=False,
+                )
+                if response.status_code in (200, 201):
+                    return response.json()
+                if response.status_code != 308:
+                    response.raise_for_status()
+                    raise ValueError(f"Unexpected YouTube upload response: {response.status_code}")
+
+                range_header = response.headers.get("Range")  # e.g. "bytes=0-1048575"
+                new_offset = int(range_header.rsplit("-", 1)[-1]) + 1 if range_header else 0
+                stalls = stalls + 1 if new_offset <= offset else 0
+                if stalls >= 3:
+                    raise RuntimeError("YouTube upload stopped making progress")
+                offset = new_offset
+                if on_progress:
+                    on_progress(min(100.0, offset / file_size * 100))
+
+    def publish_video(
+        self,
+        social_account_id: UUID,
+        video_path: str,
+        title: str,
+        caption: str,
+        on_progress: ProgressCallback | None = None,
+    ) -> PublishResult:
         from app.core.db import SessionLocal
         from app.core.security import decrypt_token
         from app.models.social_account import SocialAccount
@@ -182,15 +232,7 @@ class YouTubeProvider(SocialMediaProvider):
         start.raise_for_status()
         upload_url = start.headers["Location"]
 
-        with open(video_path, "rb") as f:
-            upload = requests.put(
-                upload_url,
-                headers={"Content-Type": "video/mp4", "Content-Length": str(file_size)},
-                data=f,
-                timeout=_UPLOAD_TIMEOUT,
-            )
-        upload.raise_for_status()
-        video_id = upload.json()["id"]
+        video_id = self._upload_in_chunks(upload_url, video_path, file_size, on_progress)["id"]
 
         return PublishResult(external_post_id=video_id, url=f"https://youtube.com/shorts/{video_id}")
 

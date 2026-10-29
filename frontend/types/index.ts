@@ -162,6 +162,7 @@ export interface ScheduledPost {
   account_name: string;
   scheduled_at: string;
   status: ScheduledPostStatus;
+  progress: number;
   title: string;
   caption: string | null;
   published_at: string | null;

@@ -6,7 +6,7 @@ import requests
 
 from app.core.config import settings
 from app.core.security import derive_pkce_verifier, pkce_code_challenge
-from app.services.social.provider import AccountInfo, PublishResult, SocialMediaProvider
+from app.services.social.provider import AccountInfo, ProgressCallback, PublishResult, SocialMediaProvider
 
 _AUTH_URL = "https://www.tiktok.com/v2/auth/authorize/"
 _TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/"
@@ -28,7 +28,10 @@ class TikTokProvider(SocialMediaProvider):
     first real connect attempt doesn't behave as expected."""
 
     def _redirect_uri(self) -> str:
-        return f"{settings.BACKEND_BASE_URL}{settings.API_PREFIX}/social-accounts/tiktok/callback"
+        # TikTok rejects http:// redirect URIs, so in local dev it needs its own https base
+        # (an ngrok tunnel) while the other platforms keep using BACKEND_BASE_URL (localhost).
+        base = settings.TIKTOK_REDIRECT_BASE_URL or settings.BACKEND_BASE_URL
+        return f"{base}{settings.API_PREFIX}/social-accounts/tiktok/callback"
 
     def get_authorization_url(self, state: str) -> str:
         code_verifier = derive_pkce_verifier(state)
@@ -135,7 +138,14 @@ class TikTokProvider(SocialMediaProvider):
         finally:
             db.close()
 
-    def publish_video(self, social_account_id: UUID, video_path: str, title: str, caption: str) -> PublishResult:
+    def publish_video(
+        self,
+        social_account_id: UUID,
+        video_path: str,
+        title: str,
+        caption: str,
+        on_progress: ProgressCallback | None = None,
+    ) -> PublishResult:
         raise NotImplementedError(
             "TikTok publishing needs TikTok's Content Posting API audit approval — implemented in Phase 4"
         )

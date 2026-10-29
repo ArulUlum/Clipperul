@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from app.api import deps
@@ -316,6 +318,55 @@ def test_list_scheduled_posts_only_returns_current_users_posts(db_session):
         app.dependency_overrides.clear()
 
 
+def test_list_exposes_upload_progress(db_session):
+    app.dependency_overrides[deps.get_db] = lambda: db_session
+    try:
+        user, clip, account, _ = _setup(db_session)
+        db_session.add(
+            ScheduledPost(
+                clip_id=clip.id,
+                social_account_id=account.id,
+                platform=SocialProvider.YOUTUBE,
+                scheduled_at=datetime.now(timezone.utc),
+                title="Uploading",
+                status=ScheduledPostStatus.UPLOADING,
+                progress=42,
+            )
+        )
+        db_session.commit()
+
+        token = create_access_token(user.id)
+        response = TestClient(app).get("/api/scheduled-posts", headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body) == 1
+        assert body[0]["status"] == "UPLOADING"
+        assert body[0]["progress"] == 42
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_new_scheduled_post_starts_at_zero_progress(db_session):
+    app.dependency_overrides[deps.get_db] = lambda: db_session
+    try:
+        user, clip, account, _ = _setup(db_session)
+        token = create_access_token(user.id)
+        response = TestClient(app).post(
+            "/api/scheduled-posts",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "clip_id": str(clip.id),
+                "social_account_ids": [str(account.id)],
+                "scheduled_at": _future(),
+                "title": "t",
+            },
+        )
+        assert response.status_code == 201
+        assert response.json()[0]["progress"] == 0
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_update_scheduled_post_while_still_scheduled(db_session):
     app.dependency_overrides[deps.get_db] = lambda: db_session
     try:
@@ -420,5 +471,167 @@ def test_cancel_scheduled_post_after_claimed_rejected(db_session):
         client = TestClient(app)
         response = client.delete(f"/api/scheduled-posts/{post.id}", headers={"Authorization": f"Bearer {token}"})
         assert response.status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+def _add_post(db_session, clip, account, status, **fields):
+    post = ScheduledPost(
+        clip_id=clip.id,
+        social_account_id=account.id,
+        platform=SocialProvider.YOUTUBE,
+        scheduled_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        title="Title",
+        status=status,
+        **fields,
+    )
+    db_session.add(post)
+    db_session.commit()
+    db_session.refresh(post)
+    return post
+
+
+@pytest.mark.parametrize(
+    "status", [ScheduledPostStatus.PROCESSING, ScheduledPostStatus.UPLOADING]
+)
+def test_cancel_post_that_is_already_running(db_session, status):
+    app.dependency_overrides[deps.get_db] = lambda: db_session
+    try:
+        user, clip, account, _ = _setup(db_session)
+        post = _add_post(db_session, clip, account, status, run_token="abc", progress=40)
+
+        token = create_access_token(user.id)
+        response = TestClient(app).delete(
+            f"/api/scheduled-posts/{post.id}", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 204
+
+        db_session.refresh(post)
+        assert post.status == ScheduledPostStatus.CANCELLED
+        # Clearing the token is what stops a worker attempt that's mid-upload or queued to retry.
+        assert post.run_token is None
+        assert post.progress == 0
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize(
+    "status", [ScheduledPostStatus.PUBLISHED, ScheduledPostStatus.FAILED, ScheduledPostStatus.CANCELLED]
+)
+def test_cannot_cancel_a_finished_post(db_session, status):
+    app.dependency_overrides[deps.get_db] = lambda: db_session
+    try:
+        user, clip, account, _ = _setup(db_session)
+        post = _add_post(db_session, clip, account, status)
+
+        token = create_access_token(user.id)
+        response = TestClient(app).delete(
+            f"/api/scheduled-posts/{post.id}", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 400
+        db_session.refresh(post)
+        assert post.status == status
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("status", [ScheduledPostStatus.FAILED, ScheduledPostStatus.CANCELLED])
+def test_retry_failed_or_cancelled_post_dispatches_a_fresh_attempt(db_session, mocker, status):
+    delay_mock = mocker.patch("app.api.scheduled_posts.publish_scheduled_post_task.delay")
+    app.dependency_overrides[deps.get_db] = lambda: db_session
+    try:
+        user, clip, account, _ = _setup(db_session)
+        post = _add_post(db_session, clip, account, status, run_token="old-token", progress=70)
+
+        token = create_access_token(user.id)
+        response = TestClient(app).post(
+            f"/api/scheduled-posts/{post.id}/retry", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 202
+        assert response.json()["status"] == "PROCESSING"
+
+        db_session.refresh(post)
+        assert post.status == ScheduledPostStatus.PROCESSING
+        assert post.progress == 0
+        # A NEW token, so any stale attempt from before the cancel/failure can't run alongside it.
+        assert post.run_token and post.run_token != "old-token"
+        delay_mock.assert_called_once_with(str(post.id), post.run_token)
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize(
+    "status",
+    [ScheduledPostStatus.SCHEDULED, ScheduledPostStatus.PROCESSING, ScheduledPostStatus.UPLOADING, ScheduledPostStatus.PUBLISHED],
+)
+def test_cannot_retry_a_post_that_is_not_failed_or_cancelled(db_session, mocker, status):
+    delay_mock = mocker.patch("app.api.scheduled_posts.publish_scheduled_post_task.delay")
+    app.dependency_overrides[deps.get_db] = lambda: db_session
+    try:
+        user, clip, account, _ = _setup(db_session)
+        post = _add_post(db_session, clip, account, status)
+
+        token = create_access_token(user.id)
+        response = TestClient(app).post(
+            f"/api/scheduled-posts/{post.id}/retry", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 400
+        delay_mock.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_cannot_retry_when_the_clip_has_no_finished_render(db_session, mocker):
+    delay_mock = mocker.patch("app.api.scheduled_posts.publish_scheduled_post_task.delay")
+    app.dependency_overrides[deps.get_db] = lambda: db_session
+    try:
+        user, clip, account, _ = _setup(db_session)
+        post = _add_post(db_session, clip, account, ScheduledPostStatus.FAILED)
+        clip.status = ClipStatus.RENDERING
+        db_session.commit()
+
+        token = create_access_token(user.id)
+        response = TestClient(app).post(
+            f"/api/scheduled-posts/{post.id}/retry", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 400
+        delay_mock.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_cannot_retry_or_cancel_someone_elses_post(db_session, mocker):
+    mocker.patch("app.api.scheduled_posts.publish_scheduled_post_task.delay")
+    app.dependency_overrides[deps.get_db] = lambda: db_session
+    try:
+        _, clip, account, _ = _setup(db_session)
+        post = _add_post(db_session, clip, account, ScheduledPostStatus.FAILED)
+        other = User(email="intruder@example.com", hashed_password=hash_password("supersecret123"))
+        db_session.add(other)
+        db_session.commit()
+        db_session.refresh(other)
+
+        headers = {"Authorization": f"Bearer {create_access_token(other.id)}"}
+        client = TestClient(app)
+        assert client.post(f"/api/scheduled-posts/{post.id}/retry", headers=headers).status_code == 404
+        assert client.delete(f"/api/scheduled-posts/{post.id}", headers=headers).status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_publish_now_hands_the_worker_the_posts_run_token(db_session, mocker):
+    delay_mock = mocker.patch("app.api.scheduled_posts.publish_scheduled_post_task.delay")
+    app.dependency_overrides[deps.get_db] = lambda: db_session
+    try:
+        user, clip, account, _ = _setup(db_session)
+        token = create_access_token(user.id)
+        TestClient(app).post(
+            "/api/scheduled-posts",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"clip_id": str(clip.id), "social_account_ids": [str(account.id)], "publish_now": True, "title": "t"},
+        )
+        post = db_session.query(ScheduledPost).one()
+        assert post.run_token
+        delay_mock.assert_called_once_with(str(post.id), post.run_token)
     finally:
         app.dependency_overrides.clear()

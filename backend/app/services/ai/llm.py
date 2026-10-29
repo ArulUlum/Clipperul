@@ -33,7 +33,11 @@ class OpenAIProvider(LLMProvider):
         if self._client is None:
             from openai import OpenAI
 
-            self._client = OpenAI(api_key=settings.OPENAI_API_KEY, timeout=60.0)
+            self._client = OpenAI(
+                api_key=settings.OPENAI_API_KEY,
+                base_url=settings.OPENAI_BASE_URL,
+                timeout=60.0
+            )
         return self._client
 
     def complete_json(self, system_prompt: str, user_prompt: str) -> dict:

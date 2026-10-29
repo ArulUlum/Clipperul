@@ -31,6 +31,16 @@ const config: Config = {
         md: "0.5rem",
         sm: "0.375rem",
       },
+      keyframes: {
+        // A segment (1/3 of the track) sweeping left to right — for "working, but no % yet".
+        indeterminate: {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(300%)" },
+        },
+      },
+      animation: {
+        indeterminate: "indeterminate 1.4s ease-in-out infinite",
+      },
     },
   },
   plugins: [],

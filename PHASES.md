@@ -13,6 +13,11 @@
   highlight detection → clip generation (center-cropped to true 9:16, never letterboxed) →
   auto subtitle burn-in (opt-out checkbox at upload)
 - AI provider abstraction: OpenAI, Anthropic, Gemini, and local Ollama — swap via `AI_LLM_PROVIDER` env only
+- Clip title/caption are derived from the highlight-scoring LLM's own `reason` field (heuristic
+  truncation, not a separate title-generation call — see `_auto_title` in
+  `app/workers/tasks/video_tasks.py`), which is explicitly instructed to answer in the
+  transcript's own detected language (`VideoAnalysisInput.language`, from Whisper) instead of
+  defaulting to English — an Indonesian video gets an Indonesian title, etc.
 - Realtime processing status via SSE
 - Clip review UI: transcript viewer, clip grid, basic title/caption editing, download
 
@@ -53,9 +58,17 @@
   Celery's own retry/countdown; a provider that isn't implemented yet (TikTok, Instagram) fails
   immediately instead of burning retries on something that won't change. Status flows
   `SCHEDULED → PROCESSING → UPLOADING → PUBLISHED`, or `→ FAILED` / (pre-claim) `→ CANCELLED`.
-- Scheduled Posts page: create form (clip + connected account + datetime + title/caption) and a
-  live-polled list of upcoming posts with edit/cancel. Published page: history of
-  published/failed/cancelled posts, with a link out to the platform post once published.
+- Posting happens from the clip editor's **Post** tab (next to Details): pick one or more
+  connected accounts, post now or schedule, edit the post title/caption, and follow the posts
+  made from that clip (edit/cancel while still scheduled) — no page change needed after editing.
+  A post can be cancelled at any point before it's published — while scheduled, preparing,
+  waiting out an automatic retry, or mid-upload (the upload stops within one chunk). Cancelling
+  also ends the automatic retrying; a failed or cancelled post can then be retried by hand
+  (`POST /api/scheduled-posts/{id}/retry`). Each (re)dispatch mints a `run_token` the worker
+  must still match, so a retry queued before a cancel can never fire later and double-post.
+  Posting is blocked while edits are unsaved/rendering, since a post uploads the clip's last
+  *rendered* file. There is no separate Scheduled Posts page; the Published page lists every
+  post across clips (upcoming/in-progress, then history), with a link out to the platform post.
 - Not built: a literal calendar-grid view (the list above is grouped by time, not a month/week
   grid) and per-platform publish analytics.
 

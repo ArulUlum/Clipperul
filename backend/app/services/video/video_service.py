@@ -1,3 +1,4 @@
+import mimetypes
 import uuid
 from pathlib import Path
 from uuid import UUID
@@ -15,11 +16,23 @@ from app.services.video.exceptions import PipelineError
 from app.services.video.url_validation import validate_video_url
 
 
+# Browsers (Windows especially) often send no type at all for .mkv, and alias others
+# (.avi as video/avi vs video/x-msvideo) — so an exact-match MIME allowlist rejects perfectly
+# good files. The extension check above is the real gate, and the worker's FFmpeg step rejects
+# anything that isn't actually a video; the client-supplied MIME is only a sanity check.
+_GENERIC_MIME_TYPES = {"", "application/octet-stream"}
+
+
+def _is_acceptable_content_type(content_type: str | None) -> bool:
+    normalized = (content_type or "").split(";")[0].strip().lower()
+    return normalized in _GENERIC_MIME_TYPES or normalized.startswith("video/")
+
+
 def validate_upload(file: UploadFile, size_bytes: int) -> None:
     ext = Path(file.filename or "").suffix.lower()
     if ext not in settings.ALLOWED_VIDEO_EXTENSIONS:
         raise PipelineError("INVALID_FILE_TYPE", f"Unsupported file extension: {ext}")
-    if file.content_type not in settings.ALLOWED_VIDEO_MIME_TYPES:
+    if not _is_acceptable_content_type(file.content_type):
         raise PipelineError("INVALID_FILE_TYPE", f"Unsupported content type: {file.content_type}")
     if size_bytes > settings.MAX_UPLOAD_SIZE_BYTES:
         raise PipelineError("FILE_TOO_LARGE", "Video exceeds the maximum allowed upload size")
@@ -49,7 +62,11 @@ class VideoService:
 
         import io
 
-        storage_service.upload_fileobj(io.BytesIO(raw_bytes), storage_key, content_type=file.content_type)
+        declared_type = (file.content_type or "").split(";")[0].strip().lower()
+        stored_content_type = declared_type if declared_type.startswith("video/") else (
+            mimetypes.guess_type(f"x{ext}")[0] or "video/mp4"
+        )
+        storage_service.upload_fileobj(io.BytesIO(raw_bytes), storage_key, content_type=stored_content_type)
 
         video = Video(
             id=video_id,

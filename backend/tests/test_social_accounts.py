@@ -314,3 +314,25 @@ def test_disconnect_other_users_account_returns_404(db_session):
         assert response.status_code == 404
     finally:
         app.dependency_overrides.clear()
+
+
+def test_tiktok_redirect_uses_its_own_base_while_youtube_keeps_the_shared_one(mocker):
+    # TikTok needs https (ngrok) while YouTube works fine on localhost — the override must move
+    # only TikTok's redirect URI.
+    from app.services.social.tiktok import TikTokProvider
+    from app.services.social.youtube import YouTubeProvider
+
+    mocker.patch("app.core.config.settings.BACKEND_BASE_URL", "http://localhost:8000")
+    mocker.patch("app.core.config.settings.TIKTOK_REDIRECT_BASE_URL", "https://abc.ngrok-free.dev")
+
+    assert TikTokProvider()._redirect_uri() == "https://abc.ngrok-free.dev/api/social-accounts/tiktok/callback"
+    assert YouTubeProvider()._redirect_uri() == "http://localhost:8000/api/social-accounts/youtube/callback"
+
+
+def test_tiktok_redirect_falls_back_to_shared_base_when_no_override(mocker):
+    from app.services.social.tiktok import TikTokProvider
+
+    mocker.patch("app.core.config.settings.BACKEND_BASE_URL", "https://prod.example.com")
+    mocker.patch("app.core.config.settings.TIKTOK_REDIRECT_BASE_URL", None)
+
+    assert TikTokProvider()._redirect_uri() == "https://prod.example.com/api/social-accounts/tiktok/callback"

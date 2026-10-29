@@ -38,7 +38,16 @@ async function request<T>(
     let message = response.statusText;
     try {
       const data = await response.json();
-      message = data.detail || data.message || message;
+      if (typeof data.detail === "string") {
+        // The common case: our own HTTPException(detail="...").
+        message = data.detail;
+      } else if (Array.isArray(data.detail)) {
+        // FastAPI's own 422 validation-error shape is a list of {msg, loc, ...} objects, not a
+        // string — stringifying it directly renders as "[object Object]" in the UI.
+        message = data.detail.map((d: { msg?: string }) => d.msg ?? JSON.stringify(d)).join("; ") || message;
+      } else if (typeof data.message === "string") {
+        message = data.message;
+      }
     } catch {
       // ignore body parse errors
     }
