@@ -35,6 +35,11 @@ class ScheduledPost(Base, UUIDPKMixin, TimestampMixin):
     # no longer matches — e.g. a retry that was queued for hours from now, then the post got
     # cancelled and manually retried — silently stands down instead of publishing a duplicate.
     run_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Set when the daily auto-clip created this post, so the run can tell whether its current
+    # upload has finished before starting the next one.
+    auto_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("auto_clip_runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Set once the publish task succeeds — the platform's own post id / permalink for the
     # "Published" page to link out to.

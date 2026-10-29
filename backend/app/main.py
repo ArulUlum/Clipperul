@@ -9,6 +9,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.api import (
     auth,
+    auto_clip,
     clips,
     dashboard,
     jobs,
@@ -61,6 +62,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 
 app.include_router(auth.router, prefix=settings.API_PREFIX)
+app.include_router(auto_clip.router, prefix=settings.API_PREFIX)
 app.include_router(videos.router, prefix=settings.API_PREFIX)
 app.include_router(clips.router, prefix=settings.API_PREFIX)
 app.include_router(jobs.router, prefix=settings.API_PREFIX)

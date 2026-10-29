@@ -31,6 +31,10 @@ class SocialMediaProvider(ABC):
     """Adapter interface each platform implements. Publishing/scheduler code depends only
     on this interface, never on a specific platform's SDK — implemented in Phase 3."""
 
+    # Whether publish_video is really implemented. Automation (e.g. the daily auto-clip) skips
+    # providers where this is False instead of queueing posts that can only fail.
+    can_publish: bool = False
+
     @abstractmethod
     def get_authorization_url(self, state: str) -> str:
         """Builds the platform's OAuth consent-screen URL the browser should be sent to.

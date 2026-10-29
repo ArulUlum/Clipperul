@@ -1,6 +1,7 @@
 "use client";
 
 import { Card, CardContent } from "@/components/ui/card";
+import { AutoClipCard } from "@/features/auto-clip/AutoClipCard";
 import { useAuth } from "@/hooks/useAuth";
 
 export default function SettingsPage() {
@@ -19,12 +20,10 @@ export default function SettingsPage() {
             <p className="text-xs text-muted-foreground">Full name</p>
             <p className="text-sm font-medium">{user?.full_name || "-"}</p>
           </div>
-          <p className="pt-2 text-xs text-muted-foreground">
-            Subtitle presets, output format defaults, and notification preferences are configurable
-            starting Phase 2.
-          </p>
         </CardContent>
       </Card>
+
+      <AutoClipCard />
     </div>
   );
 }

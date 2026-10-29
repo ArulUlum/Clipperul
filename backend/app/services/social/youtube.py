@@ -31,6 +31,8 @@ class YouTubeProvider(SocialMediaProvider):
     than the google-api-python-client SDK to avoid adding a heavy new dependency for what's
     a handful of well-documented REST calls."""
 
+    can_publish = True
+
     def _redirect_uri(self) -> str:
         # MUST match a URI registered exactly (scheme+host+port+path) in the Google Cloud
         # Console OAuth client, or Google rejects the request before showing the consent screen.

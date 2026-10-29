@@ -5,7 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
 from app.models.base import TimestampMixin, UUIDPKMixin, pg_enum
-from app.models.enums import VideoCategory, VideoStatus
+from app.models.enums import AspectRatio, VideoCategory, VideoStatus
 
 
 class Video(Base, UUIDPKMixin, TimestampMixin):
@@ -27,6 +27,11 @@ class Video(Base, UUIDPKMixin, TimestampMixin):
     # automatically. Chosen at upload time; users can still pick a different preset (or none)
     # afterward per-clip via POST /clips/{id}/render.
     subtitles_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Optional per-video overrides of how clips are cut. None / True = the normal behavior
+    # (aspect ratio chosen from the source's shape, face-tracking smart crop). The daily
+    # auto-clip sets 1:1 with tracking off, i.e. a fixed center crop.
+    clip_aspect_ratio: Mapped[AspectRatio | None] = mapped_column(pg_enum(AspectRatio, "aspect_ratio"), nullable=True)
+    auto_track: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[VideoStatus] = mapped_column(

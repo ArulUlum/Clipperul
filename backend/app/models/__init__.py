@@ -1,3 +1,4 @@
+from app.models.auto_clip import AutoClipRun, AutoClipSettings, AutoClipSource
 from app.models.clip import Clip, ClipRender
 from app.models.publish_job import PublishJob
 from app.models.scheduled_post import ScheduledPost
@@ -20,4 +21,7 @@ __all__ = [
     "ScheduledPost",
     "PublishJob",
     "SubtitlePreset",
+    "AutoClipSettings",
+    "AutoClipRun",
+    "AutoClipSource",
 ]

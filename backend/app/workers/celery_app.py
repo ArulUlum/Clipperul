@@ -10,6 +10,7 @@ celery_app = Celery(
         "app.workers.tasks.video_tasks",
         "app.workers.tasks.clip_render_tasks",
         "app.workers.tasks.publish_tasks",
+        "app.workers.tasks.auto_clip_tasks",
     ],
 )
 
@@ -27,6 +28,10 @@ celery_app.conf.update(
     beat_schedule={
         "dispatch-due-scheduled-posts": {
             "task": "dispatch_due_scheduled_posts",
+            "schedule": 60.0,
+        },
+        "auto-clip-tick": {
+            "task": "auto_clip_tick",
             "schedule": 60.0,
         },
     },

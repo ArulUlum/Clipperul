@@ -72,6 +72,30 @@
 - Not built: a literal calendar-grid view (the list above is grouped by time, not a month/week
   grid) and per-platform publish analytics.
 
+## Daily auto clip — done (opt-in, off by default)
+Settings → "Daily auto clip". Once a day (at the user's chosen local time) it picks a trending YouTube
+video for the chosen category/country, clips it, and posts the clips to the user's connected accounts.
+- **Discovery** (`app/services/auto_clip/trending.py`): YouTube Data API "most popular" chart per
+  category (Gaming, Entertainment, News, ...) or a view-sorted search for Podcast (YouTube has no
+  podcast chart). Uses `YOUTUBE_API_KEY` if set, else the user's connected YouTube account's token.
+  Skips live streams and anything outside 8–75 min; if a pick can't be processed it falls back to the
+  next trending video (up to 3 per run).
+- **Never the same link twice:** every picked video is recorded per user (`auto_clip_sources`, unique),
+  and videos the user uploaded by URL themselves count as used too.
+- **Output:** 1:1, auto-track (face tracking) off = fixed center crop — via per-video options
+  `Video.clip_aspect_ratio` / `Video.auto_track`, honored by `process_video`; the clips also store
+  the center crop so later re-renders don't re-enable tracking.
+- **Publishing:** best-scoring clips first (capped by "max clips per day"), to every connected account
+  whose platform can publish (YouTube today — `SocialMediaProvider.can_publish`), **one upload at a
+  time**: the next starts only once the previous post is published/failed/cancelled. No such account =
+  clips are created and nothing is posted.
+- **Engine:** `auto_clip_tick` (beat, every 60 s) moves every run one step from database state, so a
+  restart or missed tick loses nothing. Runs stuck >36 h are stopped so they can't block later days.
+  "Run now" starts a run immediately and counts as today's run. Turning the feature off stops scheduled
+  runs in progress.
+- Heads-up: YouTube limits how many videos a Cloud project can upload per day; and re-posting other
+  people's videos can violate their copyright and YouTube's terms.
+
 Extending a category or a social platform:
 - New video category → add a `VideoCategoryStrategy` subclass in `backend/app/services/ai/categories/`
   and register it in `registry.py`.

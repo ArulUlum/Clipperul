@@ -178,3 +178,49 @@ export interface DashboardStats {
   published_posts: number;
   processing_jobs: number;
 }
+
+export interface AutoClipCategory {
+  id: string;
+  label: string;
+}
+
+export interface AutoClipSettings {
+  enabled: boolean;
+  category: string;
+  region: string;
+  run_time: string;
+  timezone: string;
+  max_clips: number;
+  last_run_date: string | null;
+  categories: AutoClipCategory[];
+  can_discover: boolean;
+  publish_accounts: number;
+  in_progress: boolean;
+}
+
+export type AutoClipRunStatus =
+  | "SELECTING"
+  | "STARTING"
+  | "PROCESSING"
+  | "PUBLISHING"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED";
+
+export interface AutoClipRun {
+  id: string;
+  trigger: "scheduled" | "manual";
+  status: AutoClipRunStatus;
+  run_date: string;
+  category: string;
+  source_title: string | null;
+  source_url: string | null;
+  video_id: string | null;
+  clips_total: number;
+  published: number;
+  failed: number;
+  remaining: number;
+  error: string | null;
+  note: string | null;
+  created_at: string;
+}

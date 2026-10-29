@@ -194,7 +194,7 @@ def process_video(self, job_id: str) -> None:
         _emit_status(video, job, db, stage=VideoStatus.GENERATING_CLIPS, job_status=JobStatus.RUNNING)
         default_preset = _get_default_subtitle_preset(db, video.category) if video.subtitles_enabled else None
         keywords = get_strategy(video.category).keyword_list() if default_preset is not None else []
-        default_aspect_ratio = _default_clip_aspect_ratio(original_path)
+        default_aspect_ratio = video.clip_aspect_ratio or _default_clip_aspect_ratio(original_path)
 
         for index, highlight in enumerate(highlights):
             trimmed_local_path = str(Path(tmpdir) / f"clip_{index}_trimmed.mp4")
@@ -203,7 +203,15 @@ def process_video(self, job_id: str) -> None:
 
             pipeline.trim_clip(original_path, highlight.start, highlight.end, trimmed_local_path)
             target_w, target_h = pipeline.get_target_dimensions(default_aspect_ratio.value)
-            smart_crop.generate_smart_cropped_clip(trimmed_local_path, clip_local_path, target_w, target_h)
+            if video.auto_track:
+                smart_crop.generate_smart_cropped_clip(trimmed_local_path, clip_local_path, target_w, target_h)
+            else:
+                # Auto-track off: a fixed center crop. The clip also stores it as a manual crop
+                # position below, so later re-renders (trim/ratio edits) don't switch tracking
+                # back on.
+                pipeline.crop_and_scale_positioned(
+                    trimmed_local_path, clip_local_path, target_w, target_h, 50.0, 50.0
+                )
 
             # Auto-subtitles: burn the category's default preset into the clip that becomes
             # the primary/downloadable version, but keep the plain cut around as a fallback
@@ -258,6 +266,8 @@ def process_video(self, job_id: str) -> None:
                 thumbnail_key=thumb_key,
                 duration_seconds=highlight.end - highlight.start,
                 aspect_ratio=default_aspect_ratio,
+                crop_x=None if video.auto_track else 50.0,
+                crop_y=None if video.auto_track else 50.0,
                 subtitle_preset_id=applied_preset_id,
             )
             db.add(clip)

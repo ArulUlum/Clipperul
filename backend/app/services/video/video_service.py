@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import UploadFile
 
 from app.core.config import settings
-from app.models.enums import JobStatus, VideoStatus
+from app.models.enums import AspectRatio, JobStatus, VideoCategory, VideoStatus
 from app.models.video import Video
 from app.models.video_processing_job import VideoProcessingJob
 from app.repositories.job_repository import JobRepository
@@ -97,6 +97,9 @@ class VideoService:
         title: str,
         url: str,
         subtitles_enabled: bool = True,
+        category: VideoCategory | None = None,
+        clip_aspect_ratio: AspectRatio | None = None,
+        auto_track: bool = True,
     ) -> tuple[Video, VideoProcessingJob]:
         validate_video_url(url)
 
@@ -109,12 +112,16 @@ class VideoService:
             id=video_id,
             user_id=user_id,
             title=title,
-            category=None,  # AI-detected during processing — see DETECTING_CATEGORY stage
+            # None = AI-detected during processing (DETECTING_CATEGORY stage); a caller that
+            # already knows the category (e.g. the daily auto-clip) can skip that step.
+            category=category,
             original_filename=url,
             storage_key=storage_key,
             source_url=url,
             file_size_bytes=0,
             subtitles_enabled=subtitles_enabled,
+            clip_aspect_ratio=clip_aspect_ratio,
+            auto_track=auto_track,
             status=VideoStatus.UPLOADED,
         )
         video = self.video_repo.create(video)

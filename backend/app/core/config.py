@@ -90,6 +90,10 @@ class Settings(BaseSettings):
     # {BACKEND_BASE_URL}{API_PREFIX}/social-accounts/youtube/callback.
     YOUTUBE_CLIENT_ID: str | None = None
     YOUTUBE_CLIENT_SECRET: str | None = None
+    # Optional API key (Google Cloud Console > Credentials > API key, YouTube Data API v3 enabled)
+    # used by the daily auto-clip to read YouTube's "most popular" charts. Unset = it falls back
+    # to the access token of the user's connected YouTube account (which has read access).
+    YOUTUBE_API_KEY: str | None = None
     # From TikTok for Developers (developers.tiktok.com) > your app > Login Kit, with the
     # redirect URI registered as {TIKTOK_REDIRECT_BASE_URL or BACKEND_BASE_URL}{API_PREFIX}/
     # social-accounts/tiktok/callback. Note TikTok calls the app identifier a "Client Key", not
