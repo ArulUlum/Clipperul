@@ -408,10 +408,11 @@ def test_clips_are_uploaded_strictly_one_at_a_time(db_session, user):
         assert service.tick(db_session, NOW).posts_to_publish == []
     assert db_session.query(ScheduledPost).count() == 1
 
-    # Once it finishes, the next one is released.
+    # Once it finishes, the next one is released — after the spacing gap (see the gap tests below).
     post.status = ScheduledPostStatus.PUBLISHED
     db_session.commit()
-    second = service.tick(db_session, NOW)
+    assert service.tick(db_session, NOW).posts_to_publish == []
+    second = service.tick(db_session, NOW + timedelta(minutes=91))
     assert len(second.posts_to_publish) == 1
     assert db_session.query(ScheduledPost).count() == 2
 
@@ -426,7 +427,8 @@ def test_a_failed_or_cancelled_upload_does_not_block_the_rest(db_session, user, 
     first.status = final
     db_session.commit()
 
-    assert len(service.tick(db_session, NOW).posts_to_publish) == 1
+    service.tick(db_session, NOW)  # starts the gap
+    assert len(service.tick(db_session, NOW + timedelta(minutes=91)).posts_to_publish) == 1
 
 
 def test_the_run_completes_after_the_last_upload(db_session, user):
@@ -454,7 +456,8 @@ def test_a_clip_deleted_before_its_turn_is_skipped(db_session, user):
     db_session.query(ScheduledPost).one().status = ScheduledPostStatus.PUBLISHED
     db_session.commit()
 
-    result = service.tick(db_session, NOW)
+    service.tick(db_session, NOW)  # starts the gap
+    result = service.tick(db_session, NOW + timedelta(minutes=91))
 
     assert len(result.posts_to_publish) == 1
     assert sorted(p.title for p in db_session.query(ScheduledPost).all()) == ["Clip 70", "Clip 90"]
@@ -604,12 +607,12 @@ def test_run_history_is_private_to_each_user(api, db_session, user):
     assert client.get("/api/auto-clip/runs", headers=headers).json() == []
 
 
-def test_a_run_stuck_for_over_a_day_is_stopped_so_it_cannot_block_later_days(db_session, user):
+def test_a_run_stuck_for_over_two_days_is_stopped_so_it_cannot_block_later_days(db_session, user):
     _settings(db_session, user)
     stuck = service.create_run(db_session, user.id, "scheduled", "podcast", date(2026, 10, 27))
     stuck.status = "PUBLISHING"
     stuck.publish_queue = [{"clip_id": "x", "account_id": "y"}]
-    stuck.created_at = NOW - timedelta(hours=40)
+    stuck.created_at = NOW - timedelta(hours=60)
     db_session.commit()
 
     result = service.tick(db_session, NOW)
@@ -618,3 +621,96 @@ def test_a_run_stuck_for_over_a_day_is_stopped_so_it_cannot_block_later_days(db_
     assert stuck.status == "FAILED" and "too long" in stuck.error and stuck.publish_queue == []
     # ...which frees today's scheduled run to start.
     assert len(result.runs_to_start) == 1
+
+
+# ----------------------------------------------------------------------------- spacing between uploads
+
+def _one_published_then_waiting(db_session, user, mocker, *, clip_scores=(90, 80)):
+    """A run whose first upload has just finished (PUBLISHED), with the rest still queued."""
+    _account(db_session, user, SocialProvider.YOUTUBE, "yt1")
+    run = _processed_run(db_session, user, clip_scores=clip_scores)
+    service.tick(db_session, NOW)  # processing done; the first upload is released straight away
+    db_session.query(ScheduledPost).one().status = ScheduledPostStatus.PUBLISHED
+    db_session.commit()
+    return run
+
+
+def test_the_first_upload_of_a_run_starts_immediately(db_session, user):
+    _account(db_session, user, SocialProvider.YOUTUBE, "yt1")
+    run = _processed_run(db_session, user)
+    result = service.tick(db_session, NOW)
+    assert len(result.posts_to_publish) == 1
+    db_session.refresh(run)
+    assert run.next_publish_at is None
+
+
+def test_the_next_upload_waits_a_random_60_to_90_minutes(db_session, user, mocker):
+    mocker.patch.object(service.random, "uniform", side_effect=lambda lo, hi: (lo + hi) / 2)
+    run = _one_published_then_waiting(db_session, user, mocker)
+
+    assert service.tick(db_session, NOW).posts_to_publish == []
+
+    db_session.refresh(run)
+    assert service._aware(run.next_publish_at) == NOW + timedelta(minutes=75)
+    assert run.status == "PUBLISHING"
+    # Not a minute early...
+    assert service.tick(db_session, NOW + timedelta(minutes=74)).posts_to_publish == []
+    assert db_session.query(ScheduledPost).count() == 1
+    # ...and released as soon as the gap is over, clearing the timer for the following one.
+    assert len(service.tick(db_session, NOW + timedelta(minutes=76)).posts_to_publish) == 1
+    db_session.refresh(run)
+    assert run.next_publish_at is None
+
+
+def test_the_gap_is_random_but_always_within_60_to_90_minutes(db_session, user, mocker):
+    run = _one_published_then_waiting(db_session, user, mocker)
+    seen = set()
+    for _ in range(25):
+        run.next_publish_at = None
+        db_session.commit()
+        service.tick(db_session, NOW)
+        db_session.refresh(run)
+        minutes = (service._aware(run.next_publish_at) - NOW).total_seconds() / 60
+        assert 60 <= minutes <= 90
+        seen.add(round(minutes))
+    assert len(seen) > 5  # genuinely varies, not a fixed delay
+
+
+def test_every_upload_gets_its_own_gap_not_just_the_first(db_session, user, mocker):
+    mocker.patch.object(service.random, "uniform", return_value=60)
+    run = _one_published_then_waiting(db_session, user, mocker, clip_scores=(90, 80, 70))
+    service.tick(db_session, NOW)
+    assert len(service.tick(db_session, NOW + timedelta(minutes=61)).posts_to_publish) == 1  # second upload
+    db_session.query(ScheduledPost).filter(ScheduledPost.status == ScheduledPostStatus.PROCESSING).one().status = ScheduledPostStatus.PUBLISHED
+    db_session.commit()
+
+    later = NOW + timedelta(minutes=62)
+    assert service.tick(db_session, later).posts_to_publish == []  # a fresh wait starts for the third
+    assert len(service.tick(db_session, later + timedelta(minutes=61)).posts_to_publish) == 1
+    assert db_session.query(ScheduledPost).count() == 3
+
+
+def test_there_is_no_wait_after_the_last_upload(db_session, user, mocker):
+    run = _one_published_then_waiting(db_session, user, mocker, clip_scores=(90,))
+    service.tick(db_session, NOW)
+    db_session.refresh(run)
+    assert run.status == "COMPLETED" and run.next_publish_at is None
+
+
+def test_the_gap_survives_a_restart(db_session, user, mocker):
+    # The deadline lives in the database, not in memory, so a restart/redeploy doesn't reset or skip it.
+    mocker.patch.object(service.random, "uniform", return_value=80)
+    run = _one_published_then_waiting(db_session, user, mocker)
+    service.tick(db_session, NOW)
+    db_session.expire_all()
+    assert service.tick(db_session, NOW + timedelta(minutes=79)).posts_to_publish == []
+    assert len(service.tick(db_session, NOW + timedelta(minutes=81)).posts_to_publish) == 1
+
+
+def test_run_history_exposes_when_the_next_upload_is_due(api, db_session, user, mocker):
+    mocker.patch.object(service.random, "uniform", return_value=70)
+    _one_published_then_waiting(db_session, user, mocker)
+    service.tick(db_session, NOW)
+    client, headers = api
+    [item] = client.get("/api/auto-clip/runs", headers=headers).json()
+    assert item["status"] == "PUBLISHING" and item["next_publish_at"].startswith("2026-10-29T04:10")

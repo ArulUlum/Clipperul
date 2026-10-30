@@ -7,6 +7,7 @@ what should be dispatched to Celery (`TickResult`), and the task layer does the 
 after the transaction has committed.
 """
 import logging
+import random
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
@@ -58,8 +59,13 @@ MAX_ATTEMPTS = 3  # candidates tried per run before giving up
 KEEP_REMAINING = 5
 STARTING_TIMEOUT = timedelta(minutes=10)
 # A run still going after this long is stuck (lost dispatch, dead worker...) — stop it so it can't
-# block every later day, since a new run never starts while one is in progress.
-MAX_RUN_AGE = timedelta(hours=36)
+# block every later day, since a new run never starts while one is in progress. Sized to outlast
+# a long run of spaced-out uploads.
+MAX_RUN_AGE = timedelta(hours=48)
+# Gap between one upload and the next within a run, picked at random each time so a run's posts
+# aren't clustered together.
+PUBLISH_GAP_MIN_MINUTES = 60
+PUBLISH_GAP_MAX_MINUTES = 90
 DEFAULT_CATEGORY = "podcast"
 DEFAULT_REGION = "ID"
 DEFAULT_RUN_TIME = "08:00"
@@ -393,6 +399,26 @@ def _advance_publishing(db: Session, run: AutoClipRun, result: TickResult, now_u
         return
 
     queue = list(run.publish_queue)
+    if not queue:
+        run.publish_queue = []
+        run.next_publish_at = None
+        run.status = "COMPLETED"
+        db.commit()
+        return
+
+    # Space the uploads out. The first one goes immediately; every later one waits a random
+    # 60-90 minutes from the moment the previous one finished (whatever its outcome — after a
+    # failure a pause is also the safer thing, e.g. when YouTube is rejecting for quota).
+    already_posted = db.scalar(select(func.count(ScheduledPost.id)).where(ScheduledPost.auto_run_id == run.id))
+    if already_posted:
+        if run.next_publish_at is None:
+            gap = random.uniform(PUBLISH_GAP_MIN_MINUTES, PUBLISH_GAP_MAX_MINUTES)
+            run.next_publish_at = now_utc + timedelta(minutes=gap)
+            db.commit()
+            return
+        if now_utc < _aware(run.next_publish_at):
+            return
+
     while queue:
         item = queue.pop(0)
         clip = db.get(Clip, UUID(item["clip_id"]))
@@ -412,11 +438,13 @@ def _advance_publishing(db: Session, run: AutoClipRun, result: TickResult, now_u
         )
         db.add(post)
         run.publish_queue = queue
+        run.next_publish_at = None
         db.commit()
         result.posts_to_publish.append((str(post.id), post.run_token))
         return
 
-    run.publish_queue = []
+    run.publish_queue = []  # every remaining item was stale (clip deleted / account disconnected)
+    run.next_publish_at = None
     run.status = "COMPLETED"
     db.commit()
 

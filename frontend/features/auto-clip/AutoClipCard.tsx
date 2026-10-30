@@ -61,6 +61,11 @@ function RunRow({ run }: { run: AutoClipRun }) {
           {run.published} of {run.clips_total} posted{run.failed > 0 && ` · ${run.failed} failed`}
         </p>
       )}
+      {run.status === "PUBLISHING" && run.next_publish_at && (
+        <p className="text-xs text-muted-foreground">
+          Next upload at {formatDate(run.next_publish_at)} · {run.remaining} left
+        </p>
+      )}
       {run.error && <p className="text-xs text-destructive">{run.error}</p>}
       {run.note && <p className="text-xs text-muted-foreground">{run.note}</p>}
       {run.video_id && (
@@ -152,7 +157,8 @@ export function AutoClipCard() {
       <CardContent className="space-y-5">
         <p className="text-sm text-muted-foreground">
           Once a day, picks a trending YouTube video in your category (never one it already used), clips it to
-          1:1 with auto-track off, and posts the clips one by one to your connected YouTube accounts.
+          1:1 with auto-track off, and posts the clips one by one to your connected YouTube accounts —
+          spaced 60–90 minutes apart (random) so the uploads aren't bunched together.
         </p>
 
         {!settings.can_discover && (

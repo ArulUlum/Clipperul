@@ -1,7 +1,7 @@
 import uuid
-from datetime import date
+from datetime import date, datetime
 
-from sqlalchemy import JSON, Boolean, Date, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -62,6 +62,9 @@ class AutoClipRun(Base, UUIDPKMixin, TimestampMixin):
     # one has finished. List of {"clip_id", "account_id"}.
     publish_queue: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     clips_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # While PUBLISHING: the earliest time the next upload may start. Set to a random 60-90 min
+    # after an upload, so a run's posts aren't clustered together. None = nothing to wait for.
+    next_publish_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)

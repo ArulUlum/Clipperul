@@ -73,6 +73,7 @@ class AutoClipRunResponse(BaseModel):
     published: int
     failed: int
     remaining: int
+    next_publish_at: datetime | None
     error: str | None
     note: str | None
     created_at: datetime

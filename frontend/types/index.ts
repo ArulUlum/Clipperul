@@ -220,6 +220,7 @@ export interface AutoClipRun {
   published: number;
   failed: number;
   remaining: number;
+  next_publish_at: string | null;
   error: string | null;
   note: string | null;
   created_at: string;

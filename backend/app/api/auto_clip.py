@@ -61,6 +61,7 @@ def _run_response(db: Session, run: AutoClipRun) -> AutoClipRunResponse:
         published=counts.get(ScheduledPostStatus.PUBLISHED, 0),
         failed=failed,
         remaining=len(run.publish_queue or []),
+        next_publish_at=run.next_publish_at,
         error=run.error,
         note=run.note,
         created_at=run.created_at,
