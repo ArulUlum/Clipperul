@@ -19,6 +19,7 @@ from app.services.ai.category_detection import detect_video_category
 from app.services.ai.glossary import correct_transcription
 from app.services.ai.highlight_service import SelectedHighlight, find_and_select_highlights
 from app.services.ai.llm import get_llm_provider
+from app.services.ai.title_service import ClipTitleInput, build_excerpt, generate_clip_titles
 from app.services.ai.transcription import get_transcription_provider
 from app.services.storage.storage_service import storage_service
 from app.services.video import pipeline, smart_crop
@@ -196,6 +197,18 @@ def process_video(self, job_id: str) -> None:
         keywords = get_strategy(video.category).keyword_list() if default_preset is not None else []
         default_aspect_ratio = video.clip_aspect_ratio or _default_clip_aspect_ratio(original_path)
 
+        # One LLM call writes a short, catchy title for every clip (in the video's language); any
+        # clip it can't title falls back to the plain truncated-reason title below.
+        titles = generate_clip_titles(
+            [
+                ClipTitleInput(index=i, excerpt=build_excerpt(transcription.segments, h.start, h.end), reason=h.reason)
+                for i, h in enumerate(highlights)
+            ],
+            language=transcription.language,
+            category=video.category.value,
+            llm=get_llm_provider(),
+        )
+
         for index, highlight in enumerate(highlights):
             trimmed_local_path = str(Path(tmpdir) / f"clip_{index}_trimmed.mp4")
             clip_local_path = str(Path(tmpdir) / f"clip_{index}.mp4")
@@ -249,7 +262,7 @@ def process_video(self, job_id: str) -> None:
 
             clip = Clip(
                 video_id=video.id,
-                title=_auto_title(highlight.text, highlight.reason, index),
+                title=titles.get(index) or _auto_title(highlight.text, highlight.reason, index),
                 caption=_auto_caption(highlight.reason, video.category.value),
                 start_time=highlight.start,
                 end_time=highlight.end,

@@ -13,11 +13,13 @@
   highlight detection → clip generation (center-cropped to true 9:16, never letterboxed) →
   auto subtitle burn-in (opt-out checkbox at upload)
 - AI provider abstraction: OpenAI, Anthropic, Gemini, and local Ollama — swap via `AI_LLM_PROVIDER` env only
-- Clip title/caption are derived from the highlight-scoring LLM's own `reason` field (heuristic
-  truncation, not a separate title-generation call — see `_auto_title` in
-  `app/workers/tasks/video_tasks.py`), which is explicitly instructed to answer in the
-  transcript's own detected language (`VideoAnalysisInput.language`, from Whisper) instead of
-  defaulting to English — an Indonesian video gets an Indonesian title, etc.
+- Clip titles are short, hook-style titles written by the LLM (`app/services/ai/title_service.py`):
+  one call per video covers all its clips, in the transcript's own detected language, ≤60 chars, built
+  from what's actually said in each clip (no invented facts, no generic "The speaker explains…"
+  openers, distinct per clip). If that call fails or a title is unusable, the clip falls back to the
+  old truncated-reason title (`_auto_title` in `app/workers/tasks/video_tasks.py`). Captions are still
+  the highlight 'reason' + hashtags; the 'reason' itself is also asked to be in the transcript's
+  language (`VideoAnalysisInput.language`, from Whisper). Existing clips keep their old titles.
 - Realtime processing status via SSE
 - Clip review UI: transcript viewer, clip grid, basic title/caption editing, download
 
@@ -87,10 +89,12 @@ video for the chosen category/country, clips it, and posts the clips to the user
   the center crop so later re-renders don't re-enable tracking.
 - **Publishing:** best-scoring clips first (capped by "max clips per day"), to every connected account
   whose platform can publish (YouTube today — `SocialMediaProvider.can_publish`), **one upload at a
-  time**: the next starts only once the previous post is published/failed/cancelled. No such account =
+  time**: the next starts only once the previous post is published/failed/cancelled, and then only
+  after a random 60–90 min gap (`PUBLISH_GAP_*` in `service.py`; the deadline is stored in
+  `auto_clip_runs.next_publish_at`, so restarts don't reset it). The first upload of a run is immediate. No such account =
   clips are created and nothing is posted.
 - **Engine:** `auto_clip_tick` (beat, every 60 s) moves every run one step from database state, so a
-  restart or missed tick loses nothing. Runs stuck >36 h are stopped so they can't block later days.
+  restart or missed tick loses nothing. Runs stuck >48 h are stopped so they can't block later days.
   "Run now" starts a run immediately and counts as today's run. Turning the feature off stops scheduled
   runs in progress.
 - Heads-up: YouTube limits how many videos a Cloud project can upload per day; and re-posting other
