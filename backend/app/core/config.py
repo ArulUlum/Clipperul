@@ -110,6 +110,18 @@ class Settings(BaseSettings):
     # "Instagram app ID" / "Instagram app secret" (distinct from the app's Facebook App ID).
     INSTAGRAM_APP_ID: str | None = None
     INSTAGRAM_APP_SECRET: str | None = None
+    # Zernio (zernio.com) — a hosted posting API that publishes to TikTok and Instagram through its
+    # own approved apps, so no Meta/TikTok developer app is needed. Create a key in its dashboard
+    # (API Keys). When set, connecting TikTok/Instagram goes through Zernio instead of the native
+    # adapters above, and those accounts can publish.
+    ZERNIO_API_KEY: str | None = None
+    ZERNIO_API_BASE_URL: str = "https://zernio.com/api/v1"
+    # Optional: use this existing Zernio profile id for EVERYONE instead of creating one profile per
+    # user. For a personal install whose accounts are already connected in the Zernio dashboard (they
+    # sit in its "Default" profile): "Connect TikTok/Instagram" then imports them instead of asking
+    # for new connections, which would count against the plan's account limit. An imported account
+    # belongs to the first user who imports it.
+    ZERNIO_PROFILE_ID: str | None = None
 
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]

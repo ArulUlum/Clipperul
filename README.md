@@ -30,10 +30,11 @@ once a day with the optional [daily auto clip](#daily-auto-clip-optional).
     their own with backoff.
   - Posting is blocked while you have unsaved edits, because a post uploads the last *rendered* file.
   - The **Published** page lists every post across clips: upcoming and in progress, then history.
-- **Connect accounts**: OAuth to YouTube and TikTok. **Publishing is implemented for YouTube today**;
-  TikTok connects but can't post until TikTok approves the app's Content Posting API access, and
-  Instagram's adapter is built but switched off until a Meta Developer app is available — see
-  [PHASES.md](PHASES.md).
+- **Connect accounts**: YouTube connects with its own OAuth and publishes directly. **TikTok and
+  Instagram connect and publish through [Zernio](https://zernio.com)** — a hosted posting API that
+  uses its own approved apps, so you don't need a TikTok or Meta developer app. Set `ZERNIO_API_KEY`
+  to enable it (see [below](#connecting-social-accounts-optional)); the native TikTok/Instagram
+  adapters can connect accounts but can't post — see [PHASES.md](PHASES.md).
 
 Everything heavy runs through a queue — the API never blocks on FFmpeg, Whisper, or a platform's own
 upload; a Celery worker does the work and reports progress back over server-sent events.
@@ -123,19 +124,27 @@ the exact redirect URI each one expects, right above its variables.
   you'll connect as a **test user** (otherwise Google shows "Access blocked"), and expect to
   reconnect now and then — Google can expire testing-mode authorizations after about a week. The
   account needs a YouTube channel.
-- **TikTok** — create an app at [developers.tiktok.com](https://developers.tiktok.com/) with Login Kit
-  enabled, and set `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET`. TikTok rejects `http://` redirect
-  URIs even in development, so run a tunnel such as [ngrok](https://ngrok.com/) to `localhost:8000`
-  and set `TIKTOK_REDIRECT_BASE_URL` to its `https://` address (register
-  `<that address>/api/social-accounts/tiktok/callback` in the TikTok portal). This keeps
-  `BACKEND_BASE_URL` on localhost for YouTube. Until the app is approved, only accounts you've added
-  as testers can connect.
-- **Instagram** — the adapter is implemented but switched off ("Coming soon" in the UI), and it can't
-  publish yet either way. To enable *connecting* an account, create a Meta app, set
-  `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET`, add `SocialProvider.INSTAGRAM` to
-  `_IMPLEMENTED_PROVIDERS` in `backend/app/api/social_accounts.py`, and move `"instagram"` from
-  `COMING_SOON_PROVIDERS` to `IMPLEMENTED_PROVIDERS` in
-  `frontend/features/social-accounts/SocialAccountsList.tsx`.
+- **TikTok and Instagram (recommended: Zernio)** — create an account at [zernio.com](https://zernio.com),
+  make an API key (Dashboard → API Keys), and set `ZERNIO_API_KEY`. "Connect TikTok" / "Connect
+  Instagram" then opens Zernio's hosted connect page, and the accounts can publish from the Post tab
+  and the daily auto clip. No developer app, tunnel or redirect URI is involved. Zernio's free plan
+  covers the first 2 connected accounts; check its pricing for more. Things to know: a third party
+  holds access to these accounts, TikTok posts go out public (Zernio's business-app connections can't
+  post private videos), TikTok caps API posts at 15 per day per account, and Instagram needs a
+  Business or Creator account. Remove an account in Clipperul and it's removed from Zernio too.
+  Already connected accounts in Zernio's dashboard? Set `ZERNIO_PROFILE_ID` to the profile they're in
+  (its "Default" profile) and "Connect" imports them instead of connecting them a second time.
+- **TikTok (native, no posting)** — if you'd rather use your own app: create one at
+  [developers.tiktok.com](https://developers.tiktok.com/) with Login Kit enabled, and set
+  `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET`. TikTok rejects `http://` redirect URIs even in
+  development, so run a tunnel such as [ngrok](https://ngrok.com/) to `localhost:8000` and set
+  `TIKTOK_REDIRECT_BASE_URL` to its `https://` address (register
+  `<that address>/api/social-accounts/tiktok/callback` in the TikTok portal). This connects an
+  account but can't post until TikTok approves the app's Content Posting API access. It's only used
+  when `ZERNIO_API_KEY` is empty.
+- **Instagram (native)** — the adapter is built but not offered: Meta only gives new apps its
+  "unified login" setup, which it doesn't implement, and posting would need Meta's App Review.
+  Without `ZERNIO_API_KEY`, "Connect Instagram" explains that Zernio is needed.
 
 ## Daily auto clip (optional)
 
@@ -146,9 +155,11 @@ timezone), it:
    Entertainment, News, ...), skipping live streams and videos outside 8–75 minutes — and **never a
    video it has already used** (videos you uploaded yourself by link count as used too);
 2. clips it to **1:1 with auto-track off** (a fixed center crop);
-3. posts the best clips **one at a time** to your connected YouTube accounts, waiting a **random
-   60–90 minutes** between uploads. If no connected account can post, the clips are still created
-   and nothing is published.
+3. posts the best clips to your connected accounts that can publish (YouTube, plus TikTok/Instagram
+   connected through Zernio) — **one at a time per platform**, waiting a **random 60–90 minutes**
+   between uploads to the same platform. Platforms go in parallel, so each clip appears on all of
+   them at about the same time. If no connected account can post, the clips are still created and
+   nothing is published.
 
 It needs a connected YouTube account (its token is used to read the trending list) or a
 `YOUTUBE_API_KEY`. "Run now" starts a run immediately and counts as that day's run. "Max clips per day"

@@ -13,6 +13,7 @@ from app.models.clip import Clip
 from app.models.enums import PublishJobStatus, ScheduledPostStatus
 from app.models.publish_job import PublishJob
 from app.models.scheduled_post import ScheduledPost
+from app.models.social_account import SocialAccount
 from app.services.social.registry import get_social_provider
 from app.services.storage.storage_service import storage_service
 from app.workers.celery_app import celery_app
@@ -161,7 +162,8 @@ def publish_scheduled_post_task(self, scheduled_post_id: str, run_token: str | N
                 logger.warning("Could not record upload progress for scheduled_post=%s", scheduled_post_id)
                 db.rollback()
 
-        provider = get_social_provider(post.platform)
+        account = db.get(SocialAccount, post.social_account_id)
+        provider = get_social_provider(post.platform, account.broker if account is not None else None)
         provider.refresh_token_if_needed(post.social_account_id)
         result = provider.publish_video(
             post.social_account_id, local_path, post.title, post.caption or "", on_progress=report_progress

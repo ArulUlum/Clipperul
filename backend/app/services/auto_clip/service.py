@@ -62,7 +62,7 @@ STARTING_TIMEOUT = timedelta(minutes=10)
 # block every later day, since a new run never starts while one is in progress. Sized to outlast
 # a long run of spaced-out uploads.
 MAX_RUN_AGE = timedelta(hours=48)
-# Gap between one upload and the next within a run, picked at random each time so a run's posts
+# Gap between one upload and the next on the same platform, picked at random each time so a platform's posts
 # aren't clustered together.
 PUBLISH_GAP_MIN_MINUTES = 60
 PUBLISH_GAP_MAX_MINUTES = 90
@@ -143,12 +143,12 @@ def has_credential(db: Session, user_id: UUID) -> bool:
 
 
 def publishable_accounts(db: Session, user_id: UUID) -> list[SocialAccount]:
-    """Connected accounts whose platform can actually publish today (YouTube) — others would
-    only produce posts that fail."""
+    """Connected accounts that can actually publish today (YouTube, and TikTok/Instagram accounts
+    connected through Zernio) — others would only produce posts that fail."""
     accounts = db.scalars(
         select(SocialAccount).where(SocialAccount.user_id == user_id).order_by(SocialAccount.connected_at)
     ).all()
-    return [a for a in accounts if get_social_provider(a.provider).can_publish]
+    return [a for a in accounts if get_social_provider(a.provider, a.broker).can_publish]
 
 
 def used_video_ids(db: Session, user_id: UUID) -> set[str]:
@@ -319,7 +319,7 @@ def _cancel_runs_of_disabled_users(db: Session) -> None:
         st = get_settings(db, run.user_id)
         if st is None or not st.enabled:
             run.status = "CANCELLED"
-            run.publish_queue = []
+            run.publish_queue, run.next_publish_by_platform = [], {}
             run.remaining_candidates = []
             run.note = "Stopped because the daily auto-clip was turned off."
     db.commit()
@@ -343,7 +343,7 @@ def _expire_stuck_starting(db: Session, now_utc: datetime) -> None:
 def _expire_overdue_runs(db: Session, now_utc: datetime) -> None:
     for run in db.scalars(select(AutoClipRun).where(AutoClipRun.status.in_(IN_PROGRESS))).all():
         if now_utc - _aware(run.created_at) > MAX_RUN_AGE:
-            run.publish_queue = []
+            run.publish_queue, run.next_publish_by_platform = [], {}
             _fail(db, run, "This run took too long and was stopped.")
 
 
@@ -388,43 +388,43 @@ def _advance_processing(db: Session, run: AutoClipRun, result: TickResult) -> No
 
 
 def _advance_publishing(db: Session, run: AutoClipRun, result: TickResult, now_utc: datetime) -> None:
-    """One upload at a time: nothing new starts until the previous post is PUBLISHED, FAILED or
-    CANCELLED."""
-    in_flight = db.scalar(
-        select(func.count(ScheduledPost.id)).where(
-            ScheduledPost.auto_run_id == run.id, ScheduledPost.status.in_(_ACTIVE_POST_STATUSES)
-        )
-    )
-    if in_flight:
-        return
-
-    queue = list(run.publish_queue)
-    if not queue:
-        run.publish_queue = []
-        run.next_publish_at = None
-        run.status = "COMPLETED"
-        db.commit()
-        return
-
-    # Space the uploads out. The first one goes immediately; every later one waits a random
-    # 60-90 minutes from the moment the previous one finished (whatever its outcome — after a
-    # failure a pause is also the safer thing, e.g. when YouTube is rejecting for quota).
-    already_posted = db.scalar(select(func.count(ScheduledPost.id)).where(ScheduledPost.auto_run_id == run.id))
-    if already_posted:
-        if run.next_publish_at is None:
-            gap = random.uniform(PUBLISH_GAP_MIN_MINUTES, PUBLISH_GAP_MAX_MINUTES)
-            run.next_publish_at = now_utc + timedelta(minutes=gap)
-            db.commit()
-            return
-        if now_utc < _aware(run.next_publish_at):
-            return
-
-    while queue:
-        item = queue.pop(0)
+    """One upload at a time PER PLATFORM: a platform's next upload starts only once its previous
+    post is PUBLISHED, FAILED or CANCELLED, and then only after a random 60-90 minute gap. Different
+    platforms don't wait for each other, so a clip lands on YouTube, TikTok and Instagram together
+    while each platform still sees spaced-out posts."""
+    # Drop what went stale since the queue was built (clip deleted / account disconnected).
+    queue: list[tuple[dict, Clip, SocialAccount]] = []
+    for item in run.publish_queue:
         clip = db.get(Clip, UUID(item["clip_id"]))
         account = db.get(SocialAccount, UUID(item["account_id"]))
-        if clip is None or account is None or clip.status != ClipStatus.READY or not clip.storage_key:
-            continue  # deleted/disconnected since the queue was built
+        if clip is not None and account is not None and clip.status == ClipStatus.READY and clip.storage_key:
+            queue.append((item, clip, account))
+
+    rows = db.execute(
+        select(ScheduledPost.platform, ScheduledPost.status).where(ScheduledPost.auto_run_id == run.id)
+    ).all()
+    posted = {platform.value for platform, _ in rows}
+    in_flight = {platform.value for platform, status in rows if status in _ACTIVE_POST_STATUSES}
+
+    deadlines = dict(run.next_publish_by_platform or {})
+    decided: set[str] = set()  # at most one decision per platform per tick
+    released: list[tuple[dict, ScheduledPost]] = []
+    for item, clip, account in queue:
+        platform = account.provider.value
+        if platform in decided or platform in in_flight:
+            continue
+        decided.add(platform)
+        # A platform's first upload goes immediately; every later one waits a random gap counted
+        # from the moment the previous one finished (whatever its outcome — after a failure a pause
+        # is also the safer thing, e.g. when the platform is rejecting for quota).
+        if platform in posted:
+            if platform not in deadlines:
+                gap = random.uniform(PUBLISH_GAP_MIN_MINUTES, PUBLISH_GAP_MAX_MINUTES)
+                deadlines[platform] = (now_utc + timedelta(minutes=gap)).isoformat()
+                continue
+            if now_utc < datetime.fromisoformat(deadlines[platform]):
+                continue
+        deadlines.pop(platform, None)
         post = ScheduledPost(
             clip_id=clip.id,
             social_account_id=account.id,
@@ -437,16 +437,17 @@ def _advance_publishing(db: Session, run: AutoClipRun, result: TickResult, now_u
             auto_run_id=run.id,
         )
         db.add(post)
-        run.publish_queue = queue
-        run.next_publish_at = None
-        db.commit()
-        result.posts_to_publish.append((str(post.id), post.run_token))
-        return
+        released.append((item, post))
 
-    run.publish_queue = []  # every remaining item was stale (clip deleted / account disconnected)
-    run.next_publish_at = None
-    run.status = "COMPLETED"
+    released_items = [item for item, _ in released]
+    remaining = [item for item, _, _ in queue if item not in released_items]
+    waiting_on = {account.provider.value for item, _, account in queue if item in remaining}
+    run.publish_queue = remaining
+    run.next_publish_by_platform = {p: d for p, d in deadlines.items() if p in waiting_on}
+    if not remaining and not released and not in_flight:
+        run.status = "COMPLETED"
     db.commit()
+    result.posts_to_publish.extend((str(post.id), post.run_token) for _, post in released)
 
 
 def tick(db: Session, now_utc: datetime | None = None) -> TickResult:

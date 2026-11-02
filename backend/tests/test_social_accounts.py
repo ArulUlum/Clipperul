@@ -84,16 +84,18 @@ def test_connect_unknown_provider_returns_404(db_session):
         app.dependency_overrides.clear()
 
 
-def test_connect_unimplemented_provider_returns_501(db_session):
-    # Instagram's adapter is fully implemented but stays gated off (see _IMPLEMENTED_PROVIDERS
-    # in app.api.social_accounts) until a Meta Developer account is available.
+def test_connect_instagram_without_zernio_returns_503(db_session, mocker):
+    # Instagram's native adapter stays gated off (see _IMPLEMENTED_PROVIDERS in
+    # app.api.social_accounts); it only connects through Zernio.
     app.dependency_overrides[deps.get_db] = lambda: db_session
     try:
         user = _make_user(db_session)
+        mocker.patch("app.services.social.zernio.settings.ZERNIO_API_KEY", None)
         token = create_access_token(user.id)
         client = TestClient(app)
         response = client.post("/api/social-accounts/instagram/connect", headers={"Authorization": f"Bearer {token}"})
-        assert response.status_code == 501
+        assert response.status_code == 503
+        assert "ZERNIO_API_KEY" in response.json()["detail"]
     finally:
         app.dependency_overrides.clear()
 

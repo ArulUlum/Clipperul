@@ -23,11 +23,10 @@ const PROVIDER_ICONS: Record<SocialProvider, { icon: LucideIcon; className: stri
   instagram: { icon: Instagram, className: "text-pink-600" },
 };
 
-// YouTube and TikTok have working OAuth connections. Instagram's adapter is fully built too,
-// but stays gated to "coming soon" until a Meta Developer account is available to get
-// INSTAGRAM_APP_ID/SECRET from.
-const IMPLEMENTED_PROVIDERS: SocialProvider[] = ["youtube", "tiktok"];
-const COMING_SOON_PROVIDERS: SocialProvider[] = ["instagram"];
+// YouTube connects with its own OAuth; TikTok and Instagram connect through Zernio (the backend
+// answers with a clear "set ZERNIO_API_KEY" message when that isn't configured yet).
+const IMPLEMENTED_PROVIDERS: SocialProvider[] = ["youtube", "tiktok", "instagram"];
+const COMING_SOON_PROVIDERS: SocialProvider[] = [];
 
 export function SocialAccountsList() {
   const { data: accounts, mutate: refetch } = useSWR<SocialAccount[]>("/social-accounts");

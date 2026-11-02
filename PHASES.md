@@ -48,6 +48,21 @@
   account for `INSTAGRAM_APP_ID`/`INSTAGRAM_APP_SECRET`, which isn't available yet. Flip it back
   on by adding `SocialProvider.INSTAGRAM` to that set once those credentials exist.
 - Accounts page lists connect/disconnect for every implemented provider.
+- **TikTok and Instagram via Zernio** (`app/services/social/zernio.py`): with `ZERNIO_API_KEY` set,
+  connecting them opens Zernio's hosted connect page instead of the native OAuth, and those accounts
+  can publish. One Zernio *profile* per user (found by our user id as `externalId`, nothing stored);
+  the connect redirect returns to `/api/social-accounts/zernio/callback`, which trusts only the signed
+  `state` and reads the accounts back from Zernio (so a tampered URL can't attach someone else's
+  account). Accounts are ordinary `social_accounts` rows with `broker="zernio"` (migration 0017),
+  `external_account_id` = Zernio's account id and no token of ours, so scheduling, retries,
+  cancelling and the auto clip are unchanged: `get_social_provider(provider, broker)` hands a
+  brokered account to `ZernioProvider`. Publishing = presigned upload of the rendered clip (progress
+  fills the bar to 90%) → `POST /posts` with `publishNow` → poll the post until the platform says
+  published/failed (each poll is also the cancel checkpoint). TikTok posts are public with the
+  consent flags Zernio requires set; Instagram posts are Reels shared to the feed. Disconnecting
+  also deletes the account on Zernio (best effort). Not built: Zernio webhooks (polling is enough),
+  idempotency keys (Zernio itself rejects identical content to the same account within 24 h), and
+  TikTok's "draft" mode.
 
 ## Phase 4 — done
 - `POST/GET/PATCH/DELETE /api/scheduled-posts` — create (validates the clip is READY and the
@@ -88,11 +103,14 @@ video for the chosen category/country, clips it, and posts the clips to the user
   `Video.clip_aspect_ratio` / `Video.auto_track`, honored by `process_video`; the clips also store
   the center crop so later re-renders don't re-enable tracking.
 - **Publishing:** best-scoring clips first (capped by "max clips per day"), to every connected account
-  whose platform can publish (YouTube today — `SocialMediaProvider.can_publish`), **one upload at a
-  time**: the next starts only once the previous post is published/failed/cancelled, and then only
-  after a random 60–90 min gap (`PUBLISH_GAP_*` in `service.py`; the deadline is stored in
-  `auto_clip_runs.next_publish_at`, so restarts don't reset it). The first upload of a run is immediate. No such account =
-  clips are created and nothing is posted.
+  that can publish (YouTube, and TikTok/Instagram via Zernio — `SocialMediaProvider.can_publish`),
+  **one upload at a time per platform**: a platform's next upload starts only once its previous post
+  is published/failed/cancelled, and then only after a random 60–90 min gap (`PUBLISH_GAP_*` in
+  `service.py`). Platforms don't wait for each other, so a clip goes to YouTube, TikTok and Instagram
+  together while each platform still sees spaced-out posts (5 clips take ~5 h, not 5 × accounts). The
+  deadlines are stored per platform in `auto_clip_runs.next_publish_by_platform`, so restarts don't
+  reset them (`next_publish_at`, shown in the UI, is the soonest of them). A platform's first upload
+  of a run is immediate. No such account = clips are created and nothing is posted.
 - **Engine:** `auto_clip_tick` (beat, every 60 s) moves every run one step from database state, so a
   restart or missed tick loses nothing. Runs stuck >48 h are stopped so they can't block later days.
   "Run now" starts a run immediately and counts as today's run. Turning the feature off stops scheduled

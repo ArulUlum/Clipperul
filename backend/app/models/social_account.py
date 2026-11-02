@@ -20,8 +20,13 @@ class SocialAccount(Base, UUIDPKMixin, TimestampMixin):
     )
     account_name: Mapped[str] = mapped_column(String(255), nullable=False)
     external_account_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Who actually talks to the platform for this account: None = our own OAuth adapter for
+    # `provider`; "zernio" = published through Zernio, where external_account_id is Zernio's
+    # account id (see app.services.social.zernio).
+    broker: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Encrypted at rest via app.core.security.encrypt_token/decrypt_token — never serialized to the API.
-    encrypted_access_token: Mapped[str] = mapped_column(Text, nullable=False)
+    # Empty for brokered accounts: the broker holds the platform credentials, not us.
+    encrypted_access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     encrypted_refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

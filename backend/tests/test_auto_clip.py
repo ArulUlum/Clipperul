@@ -138,10 +138,10 @@ def user(db_session):
     return u
 
 
-def _account(db_session, user, provider=SocialProvider.YOUTUBE, ext="UC1"):
+def _account(db_session, user, provider=SocialProvider.YOUTUBE, ext="UC1", broker=None):
     a = SocialAccount(
         user_id=user.id, provider=provider, account_name=f"{provider.value}-{ext}", external_account_id=ext,
-        encrypted_access_token="enc", connected_at=datetime.now(timezone.utc),
+        encrypted_access_token="enc", connected_at=datetime.now(timezone.utc), broker=broker,
     )
     db_session.add(a)
     db_session.commit()
@@ -666,7 +666,7 @@ def test_the_gap_is_random_but_always_within_60_to_90_minutes(db_session, user, 
     run = _one_published_then_waiting(db_session, user, mocker)
     seen = set()
     for _ in range(25):
-        run.next_publish_at = None
+        run.next_publish_by_platform = {}
         db_session.commit()
         service.tick(db_session, NOW)
         db_session.refresh(run)
@@ -705,6 +705,111 @@ def test_the_gap_survives_a_restart(db_session, user, mocker):
     db_session.expire_all()
     assert service.tick(db_session, NOW + timedelta(minutes=79)).posts_to_publish == []
     assert len(service.tick(db_session, NOW + timedelta(minutes=81)).posts_to_publish) == 1
+
+
+# ----------------------------------------------------------------------------- one gap per platform
+
+def _three_platforms(db_session, user, clip_scores=(90, 80)):
+    _account(db_session, user, SocialProvider.YOUTUBE, "yt1")
+    _account(db_session, user, SocialProvider.TIKTOK, "tt1", broker="zernio")
+    _account(db_session, user, SocialProvider.INSTAGRAM, "ig1", broker="zernio")
+    return _processed_run(db_session, user, clip_scores=clip_scores)
+
+
+def _posts_by_platform(db_session):
+    counts: dict[str, int] = {}
+    for post in db_session.query(ScheduledPost):
+        counts[post.platform.value] = counts.get(post.platform.value, 0) + 1
+    return counts
+
+
+def _finish(db_session, *platforms, status=ScheduledPostStatus.PUBLISHED):
+    for post in db_session.query(ScheduledPost).filter(ScheduledPost.status != status):
+        if post.platform.value in platforms:
+            post.status = status
+    db_session.commit()
+
+
+def test_every_platform_gets_the_best_clip_at_once(db_session, user):
+    _three_platforms(db_session, user)
+
+    result = service.tick(db_session, NOW)
+
+    assert len(result.posts_to_publish) == 3
+    assert _posts_by_platform(db_session) == {"youtube": 1, "tiktok": 1, "instagram": 1}
+    assert {p.title for p in db_session.query(ScheduledPost)} == {"Clip 90"}
+
+
+def test_each_platform_waits_its_own_gap_and_the_others_dont_wait_for_it(db_session, user, mocker):
+    mocker.patch.object(service.random, "uniform", return_value=60)
+    run = _three_platforms(db_session, user)
+    service.tick(db_session, NOW)
+    _finish(db_session, "youtube", "instagram")  # TikTok is still uploading its first post
+
+    assert service.tick(db_session, NOW).posts_to_publish == []  # the gaps start now
+    db_session.refresh(run)
+    assert set(run.next_publish_by_platform) == {"youtube", "instagram"}  # none for the busy platform
+
+    result = service.tick(db_session, NOW + timedelta(minutes=61))
+
+    assert len(result.posts_to_publish) == 2  # YouTube and Instagram move on...
+    assert _posts_by_platform(db_session) == {"youtube": 2, "tiktok": 1, "instagram": 2}  # ...TikTok doesn't
+
+
+def test_next_upload_time_shown_is_the_soonest_platform_deadline(db_session, user, mocker):
+    mocker.patch.object(service.random, "uniform", side_effect=[80, 65, 90])
+    run = _three_platforms(db_session, user)
+    service.tick(db_session, NOW)
+    _finish(db_session, "youtube", "tiktok", "instagram")
+
+    service.tick(db_session, NOW)
+
+    db_session.refresh(run)
+    assert sorted(run.next_publish_by_platform.values()) == sorted(
+        (NOW + timedelta(minutes=m)).isoformat() for m in (80, 65, 90)
+    )
+    assert service._aware(run.next_publish_at) == NOW + timedelta(minutes=65)
+
+
+def test_the_run_is_not_complete_until_every_platform_has_finished(db_session, user):
+    run = _three_platforms(db_session, user, clip_scores=(90,))
+    service.tick(db_session, NOW)
+    _finish(db_session, "youtube", "instagram")
+
+    service.tick(db_session, NOW)
+    db_session.refresh(run)
+    assert run.status == "PUBLISHING"  # TikTok's post is still in flight
+
+    _finish(db_session, "tiktok")
+    service.tick(db_session, NOW)
+    db_session.refresh(run)
+    assert run.status == "COMPLETED" and run.next_publish_by_platform == {}
+
+
+def test_a_disconnected_platform_is_skipped_without_stopping_the_others(db_session, user):
+    run = _three_platforms(db_session, user)
+    tiktok = db_session.query(SocialAccount).filter_by(external_account_id="tt1").one()
+    tiktok_id = str(tiktok.id)
+    db_session.delete(tiktok)
+    db_session.commit()
+
+    service.tick(db_session, NOW)
+
+    assert _posts_by_platform(db_session) == {"youtube": 1, "instagram": 1}
+    db_session.refresh(run)
+    assert all(item["account_id"] != tiktok_id for item in run.publish_queue)  # its leftovers were dropped
+
+
+def test_a_platforms_failed_upload_still_gets_a_pause_before_its_next(db_session, user, mocker):
+    mocker.patch.object(service.random, "uniform", return_value=70)
+    run = _three_platforms(db_session, user)
+    service.tick(db_session, NOW)
+    _finish(db_session, "tiktok", status=ScheduledPostStatus.FAILED)
+
+    service.tick(db_session, NOW)
+    db_session.refresh(run)
+    assert "tiktok" in run.next_publish_by_platform
+    assert service.tick(db_session, NOW + timedelta(minutes=69)).posts_to_publish == []
 
 
 def test_run_history_exposes_when_the_next_upload_is_due(api, db_session, user, mocker):
