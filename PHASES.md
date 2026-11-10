@@ -17,9 +17,13 @@
   one call per video covers all its clips, in the transcript's own detected language, ≤60 chars, built
   from what's actually said in each clip (no invented facts, no generic "The speaker explains…"
   openers, distinct per clip). If that call fails or a title is unusable, the clip falls back to the
-  old truncated-reason title (`_auto_title` in `app/workers/tasks/video_tasks.py`). Captions are still
-  the highlight 'reason' + hashtags; the 'reason' itself is also asked to be in the transcript's
-  language (`VideoAnalysisInput.language`, from Whisper). Existing clips keep their old titles.
+  old truncated-reason title (`_auto_title` in `app/workers/tasks/video_tasks.py`). The same call
+  (`generate_clip_copy`) writes each clip's caption (the point of the clip + one question to the
+  viewer, no "Pembicara menjelaskan…" narration), 3–5 topic hashtags (generic ones like #fyp/#viral are
+  dropped) and one follow CTA per video; `_compose_caption` posts them as caption, CTA, then topic tags
+  + the category tag + #shorts. Without an LLM caption the highlight 'reason' + the category's stock
+  hashtags stand in, as before. Added after early analytics (Nov 2026) showed ~0 comments and very low
+  follow conversion on every platform. Existing clips keep their old titles and captions.
 - Realtime processing status via SSE
 - Clip review UI: transcript viewer, clip grid, basic title/caption editing, download
 
@@ -95,13 +99,29 @@ video for the chosen category/country, clips it, and posts the clips to the user
 - **Discovery** (`app/services/auto_clip/trending.py`): YouTube Data API "most popular" chart per
   category (Gaming, Entertainment, News, ...) or a view-sorted search for Podcast (YouTube has no
   podcast chart). Uses `YOUTUBE_API_KEY` if set, else the user's connected YouTube account's token.
+  **News** merges YouTube's News & Politics chart with searches (`_NEWS_QUERIES`, per region, medium
+  and long videos): speeches by senior officials, podcasts, and interviews / clarifications /
+  influencer talk. They are ranked by views per hour since upload (`rank_by_velocity`, with a 6 h age
+  floor) so what is hot *now* wins; a run costs about 650 API quota units (6 searches). Clips of it
+  use `NewsCategoryStrategy` (`ai/categories/news.py`), which favors the country's direction,
+  programs and policies, critical, candid or revealing statements and concrete numbers from whoever
+  says them, and down-weights greetings and protocol. Migration 0019 adds `news` to the
+  `video_category` enum.
   Skips live streams and anything outside 8–75 min; if a pick can't be processed it falls back to the
   next trending video (up to 3 per run).
 - **Never the same link twice:** every picked video is recorded per user (`auto_clip_sources`, unique),
   and videos the user uploaded by URL themselves count as used too.
-- **Output:** 1:1, auto-track (face tracking) off = fixed center crop — via per-video options
-  `Video.clip_aspect_ratio` / `Video.auto_track`, honored by `process_video`; the clips also store
-  the center crop so later re-renders don't re-enable tracking.
+- **Output:** 1:1, auto-track (face tracking) off = fixed center crop, in the news layout — via
+  per-video options `Video.clip_aspect_ratio` / `Video.auto_track` / `Video.clip_layout`, honored by
+  `process_video`; the clips also store the center crop so later re-renders don't re-enable tracking.
+- **News layout** (`app/services/video/layout.py`, migration 0020 adds `clips.layout` and
+  `videos.clip_layout`): the crop scaled to 1080 wide and centered on a 1080x1920 canvas over a
+  blurred, darkened copy of itself, the title as a headline (ASS, red box) bottom-anchored 40 px above
+  the clip, subtitles defaulting to 110 px below it — clear of the feeds' own UI at the very top and
+  bottom. One extra FFmpeg pass (~10 s for a 40 s clip). The composed video *is* the plain render, so
+  subtitle presets, trims and crops work on it unchanged; a 9:16 crop is left alone. Since the title
+  is burned in, a title change re-renders such a clip. The editor previews it (Ratio tab → Layout),
+  mirroring the geometry in TypeScript.
 - **Publishing:** best-scoring clips first (capped by "max clips per day"), to every connected account
   that can publish (YouTube, and TikTok/Instagram via Zernio — `SocialMediaProvider.can_publish`),
   **one upload at a time per platform**: a platform's next upload starts only once its previous post

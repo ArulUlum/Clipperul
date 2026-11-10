@@ -73,10 +73,13 @@ def _http(mocker, *payloads, status=200):
     return mocker.patch("app.services.auto_clip.trending.requests.get", side_effect=responses)
 
 
-def _video_item(video_id, duration="PT30M", views="1000", live="none"):
+def _video_item(video_id, duration="PT30M", views="1000", live="none", published=None):
+    snippet = {"title": f"Title {video_id}", "channelTitle": "Chan", "liveBroadcastContent": live}
+    if published:
+        snippet["publishedAt"] = published
     return {
         "id": video_id,
-        "snippet": {"title": f"Title {video_id}", "channelTitle": "Chan", "liveBroadcastContent": live},
+        "snippet": snippet,
         "contentDetails": {"duration": duration},
         "statistics": {"viewCount": views},
     }
@@ -113,6 +116,59 @@ def test_podcast_query_has_no_country_term_for_english_speaking_regions(mocker):
     get = _http(mocker, {"items": []})
     trending.fetch_candidates("podcast", "US", api_key="K")
     assert get.call_args.kwargs["params"]["q"] == "podcast"
+
+
+def test_news_merges_the_chart_with_speech_podcast_and_influencer_searches_ranked_by_velocity(mocker):
+    def ago(hours):
+        return (NOW - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    empty = {"items": []}
+    chart = {"items": [_video_item("a" * 11, views="1000", published=ago(48))]}  # 21 views/h
+    speech_medium = {"items": [{"id": {"videoId": "b" * 11}}, {"id": {"videoId": "c" * 11}}]}
+    podcast_long = {"items": [{"id": {"videoId": "c" * 11}}, {"id": {"videoId": "a" * 11}}]}
+    details = {"items": [
+        _video_item("b" * 11, views="6000", published=ago(12)),    # 500 views/h
+        _video_item("c" * 11, views="100000", published=ago(70)),  # ~1429 views/h, though not the newest
+        _video_item("a" * 11, views="1000", published=ago(48)),
+    ]}
+    # chart, then ID's three queries (speeches / podcasts / interviews) x (medium, long), then details
+    get = _http(mocker, chart, speech_medium, empty, empty, podcast_long, empty, empty, details)
+
+    cands = trending.fetch_candidates("news", "ID", api_key="K", now=NOW)
+
+    calls = get.call_args_list
+    assert calls[0].kwargs["params"]["videoCategoryId"] == "25" and calls[0].kwargs["params"]["chart"] == "mostPopular"
+    searches = [c.kwargs["params"] for c in calls[1:7]]
+    assert [p["videoDuration"] for p in searches] == ["medium", "long"] * 3
+    assert [p["q"] for p in searches[::2]] == [
+        "pidato presiden | pidato menteri | arahan presiden | sidang kabinet",  # as-is, no country suffix
+        "podcast indonesia",
+        "wawancara eksklusif | klarifikasi | blak-blakan | bongkar",
+    ]
+    assert all(p["order"] == "viewCount" and p["relevanceLanguage"] == "id" for p in searches)
+    # c and a each came back from more than one place but are asked about once
+    assert calls[7].kwargs["params"]["id"] == f"{'b' * 11},{'c' * 11},{'a' * 11}"
+    assert [c.video_id for c in cands] == ["c" * 11, "b" * 11, "a" * 11]  # hottest per hour first
+
+
+def test_news_ranking_does_not_let_a_brand_new_video_win_on_a_few_views(mocker):
+    chart = {"items": [
+        _video_item("a" * 11, views="30", published=(NOW - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")),
+        _video_item("b" * 11, views="600", published=(NOW - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ")),
+    ]}
+    _http(mocker, chart, *[{"items": []}] * 6)
+    cands = trending.fetch_candidates("news", "ID", api_key="K", now=NOW)
+    # 30 views in 10 minutes would be 180/h unclamped; with the 6 h floor it is 5/h, below b's 25/h
+    assert [c.video_id for c in cands] == ["b" * 11, "a" * 11]
+
+
+def test_news_falls_back_to_english_queries_for_other_regions(mocker):
+    get = _http(mocker, {"items": []}, *[{"items": []}] * 6)
+    trending.fetch_candidates("news", "US", api_key="K")
+    queries = [c.kwargs["params"]["q"] for c in get.call_args_list[1:7:2]]
+    assert queries[0].startswith("president speech | prime minister speech")
+    assert queries[1] == "podcast"
+    assert "exclusive interview" in queries[2]
 
 
 def test_api_errors_become_readable_trending_errors(mocker):
@@ -301,6 +357,36 @@ def test_trending_errors_fail_the_run_with_the_reason(db_session, user, mocker):
     assert service.start_run(db_session, run.id) is None
     db_session.refresh(run)
     assert run.status == "FAILED" and "quota exceeded" in run.error
+
+
+def test_expired_youtube_authorization_fails_the_run_with_a_reconnect_hint(db_session, user, mocker):
+    _account(db_session, user)
+    mocker.patch.object(service.YouTubeProvider, "refresh_token_if_needed", side_effect=service.YouTubeAuthExpired("x"))
+    run = service.create_run(db_session, user.id, "scheduled", "podcast", date(2026, 10, 29))
+    run.status = "STARTING"
+    db_session.commit()
+
+    assert service.start_run(db_session, run.id) is None
+    db_session.refresh(run)
+    assert run.status == "FAILED" and "reconnect your YouTube account" in run.error
+
+
+def test_youtube_refresh_maps_invalid_grant_to_auth_expired(db_session, user, mocker):
+    from app.core.security import encrypt_token
+    from app.services.social.youtube import YouTubeAuthExpired, YouTubeProvider
+
+    account = _account(db_session, user)
+    account.encrypted_refresh_token = encrypt_token("old")
+    account.token_expires_at = None  # unknown expiry -> always refresh (SQLite hands back naive datetimes)
+    db_session.commit()
+    mocker.patch("app.core.db.SessionLocal", return_value=db_session)
+    mocker.patch(
+        "app.services.social.youtube.requests.post",
+        return_value=mocker.Mock(status_code=400, json=lambda: {"error": "invalid_grant"}),
+    )
+
+    with pytest.raises(YouTubeAuthExpired):
+        YouTubeProvider().refresh_token_if_needed(account.id)
 
 
 def test_if_a_video_cant_be_processed_the_next_trending_one_is_tried(db_session, user, mocker, no_dns):

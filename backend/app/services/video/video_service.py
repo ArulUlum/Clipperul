@@ -100,6 +100,7 @@ class VideoService:
         category: VideoCategory | None = None,
         clip_aspect_ratio: AspectRatio | None = None,
         auto_track: bool = True,
+        clip_layout: str | None = None,
     ) -> tuple[Video, VideoProcessingJob]:
         validate_video_url(url)
 
@@ -122,6 +123,7 @@ class VideoService:
             subtitles_enabled=subtitles_enabled,
             clip_aspect_ratio=clip_aspect_ratio,
             auto_track=auto_track,
+            clip_layout=clip_layout,
             status=VideoStatus.UPLOADED,
         )
         video = self.video_repo.create(video)

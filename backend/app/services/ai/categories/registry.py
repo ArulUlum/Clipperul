@@ -1,11 +1,13 @@
 from app.models.enums import VideoCategory
 from app.services.ai.categories.gaming import GamingCategoryStrategy
+from app.services.ai.categories.news import NewsCategoryStrategy
 from app.services.ai.categories.podcast import PodcastCategoryStrategy
 from app.services.ai.categories.strategy import VideoCategoryStrategy
 
 _STRATEGIES: dict[VideoCategory, type[VideoCategoryStrategy]] = {
     VideoCategory.GAMING: GamingCategoryStrategy,
     VideoCategory.PODCAST: PodcastCategoryStrategy,
+    VideoCategory.NEWS: NewsCategoryStrategy,
 }
 
 

@@ -32,6 +32,8 @@ class Video(Base, UUIDPKMixin, TimestampMixin):
     # auto-clip sets 1:1 with tracking off, i.e. a fixed center crop.
     clip_aspect_ratio: Mapped[AspectRatio | None] = mapped_column(pg_enum(AspectRatio, "aspect_ratio"), nullable=True)
     auto_track: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    # Layout for the clips made from this video ("full" / "news"); null = "full".
+    clip_layout: Mapped[str | None] = mapped_column(String(20), nullable=True)
     duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[VideoStatus] = mapped_column(

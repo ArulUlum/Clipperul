@@ -1,6 +1,8 @@
 from app.models.enums import VideoCategory
 from app.services.ai.categories.gaming import GamingCategoryStrategy
+from app.services.ai.categories.news import NewsCategoryStrategy
 from app.services.ai.categories.podcast import PodcastCategoryStrategy
+from app.services.ai.categories.registry import get_strategy, list_available_categories
 from app.services.ai.llm import LLMProvider
 from app.services.ai.transcription import TranscriptSegmentResult
 from app.services.video.analysis_types import AudioEnergyPoint, SceneChangePoint, VideoAnalysisInput
@@ -54,6 +56,49 @@ def test_podcast_strategy_rewards_opinion_language():
     assert set(scores.keys()) == {
         "insight_score", "emotion_score", "topic_relevance", "statement_strength", "context_score",
     }
+
+
+def test_news_strategy_prefers_policy_and_critical_talk_over_ceremony():
+    strategy = NewsCategoryStrategy()
+    assert strategy.category == VideoCategory.NEWS
+
+    substance = (
+        "Ke depan pemerintah akan menaikkan anggaran pangan sebesar 20 persen. "
+        "Korupsi tidak boleh lagi dibiarkan, kita harus tegas."
+    )
+    ceremony = "Assalamualaikum. Yang terhormat hadirin sekalian, selamat pagi, terima kasih atas kehadirannya."
+    a = _analysis_with_text(substance)
+    b = _analysis_with_text(ceremony)
+    good = strategy.compute_heuristic_scores(a, substance, 0.0, 30.0)
+    bad = strategy.compute_heuristic_scores(b, ceremony, 0.0, 30.0)
+
+    assert set(good) == {
+        "direction_score", "critical_score", "buzz_score", "numbers_score", "speech_energy", "substance_score",
+    }
+    assert good["direction_score"] > 0 and good["critical_score"] > 0 and good["numbers_score"] > 0
+    assert bad["direction_score"] == 0 and bad["critical_score"] == 0 and bad["buzz_score"] == 0
+    assert good["substance_score"] > bad["substance_score"]
+    assert sum(good.values()) > sum(bad.values())
+
+
+def test_news_strategy_rewards_revelations_from_anyone():
+    text = "Jujur, ternyata faktanya begini, ini rahasia yang terungkap dan jadi viral."
+    analysis = _analysis_with_text(text)
+    scores = NewsCategoryStrategy().compute_heuristic_scores(analysis, text, 0.0, 30.0)
+    assert scores["buzz_score"] > 0
+
+
+def test_news_prompt_covers_officials_podcasts_and_influencers_and_skips_protocol():
+    prompt = NewsCategoryStrategy().build_system_prompt().lower()
+    assert "president" in prompt and "minister" in prompt
+    assert "podcast" in prompt and "influencer" in prompt
+    assert "skip protocol" in prompt
+    assert "never invent" in prompt
+
+
+def test_news_is_registered_so_detection_can_pick_it():
+    assert VideoCategory.NEWS in list_available_categories()
+    assert isinstance(get_strategy(VideoCategory.NEWS), NewsCategoryStrategy)
 
 
 def test_gaming_and_podcast_score_the_same_text_differently():

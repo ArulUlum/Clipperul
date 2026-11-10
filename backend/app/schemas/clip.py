@@ -1,10 +1,13 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel
 
 from app.models.clip import Clip, ClipRender
 from app.models.enums import AspectRatio, ClipStatus, VideoCategory
+
+ClipLayout = Literal["full", "news"]  # see app/services/video/layout.py
 
 
 class ClipResponse(BaseModel):
@@ -27,6 +30,7 @@ class ClipResponse(BaseModel):
     aspect_ratio: AspectRatio
     crop_x: float | None
     crop_y: float | None
+    layout: ClipLayout
     subtitle_preset_id: UUID | None
     subtitle_font_size: int | None
     subtitle_position_x: float | None
@@ -63,6 +67,7 @@ def build_clip_response(clip: Clip) -> ClipResponse:
         aspect_ratio=clip.aspect_ratio,
         crop_x=clip.crop_x,
         crop_y=clip.crop_y,
+        layout=clip.layout,
         subtitle_preset_id=clip.subtitle_preset_id,
         subtitle_font_size=clip.subtitle_font_size,
         subtitle_position_x=clip.subtitle_position_x,
@@ -104,6 +109,8 @@ class ClipApplyEditsRequest(BaseModel):
     # None/None = auto face-tracking; both given = manual crop override.
     crop_x: float | None = None
     crop_y: float | None = None
+    # None = keep the clip's current layout.
+    layout: ClipLayout | None = None
     # None subtitle_preset_id = no subtitles on the result.
     subtitle_preset_id: UUID | None = None
     subtitle_font_size: int | None = None

@@ -45,7 +45,7 @@ from app.services.auto_clip.trending import (
     filter_candidates,
 )
 from app.services.social.registry import get_social_provider
-from app.services.social.youtube import YouTubeProvider
+from app.services.social.youtube import YouTubeAuthExpired, YouTubeProvider
 from app.services.video.exceptions import PipelineError
 from app.services.video.video_service import VideoService
 
@@ -71,7 +71,7 @@ DEFAULT_REGION = "ID"
 DEFAULT_RUN_TIME = "08:00"
 DEFAULT_MAX_CLIPS = 5
 
-_VIDEO_CATEGORY = {"podcast": VideoCategory.PODCAST, "gaming": VideoCategory.GAMING}
+_VIDEO_CATEGORY = {"podcast": VideoCategory.PODCAST, "gaming": VideoCategory.GAMING, "news": VideoCategory.NEWS}
 _ACTIVE_POST_STATUSES = (
     ScheduledPostStatus.SCHEDULED,
     ScheduledPostStatus.PROCESSING,
@@ -174,7 +174,12 @@ def get_credentials(db: Session, user_id: UUID) -> tuple[str | None, str | None]
     )
     if account is None:
         raise AutoClipError("Connect a YouTube account (or set YOUTUBE_API_KEY) so trending videos can be read.")
-    YouTubeProvider().refresh_token_if_needed(account.id)
+    try:
+        YouTubeProvider().refresh_token_if_needed(account.id)
+    except YouTubeAuthExpired:
+        raise AutoClipError(
+            "YouTube access expired — reconnect your YouTube account in Accounts, then run again."
+        ) from None
     db.refresh(account)
     return None, decrypt_token(account.encrypted_access_token)
 
@@ -246,9 +251,11 @@ def _launch_from(db: Session, run: AutoClipRun, queue: list[tuple[str, str]], la
                 title=title[:255],
                 url=f"https://www.youtube.com/watch?v={youtube_id}",
                 subtitles_enabled=True,
-                category=category,  # podcast/gaming skip AI detection; other categories get detected
+                category=category,  # podcast/gaming/news skip AI detection; other categories get detected
                 clip_aspect_ratio=AspectRatio.SQUARE_1_1,
                 auto_track=False,
+                # The square crop centered on a full-screen 9:16 canvas with the title as headline.
+                clip_layout="news",
             )
         except PipelineError as exc:
             logger.warning("Auto-clip couldn't queue %s: %s", youtube_id, exc.message)

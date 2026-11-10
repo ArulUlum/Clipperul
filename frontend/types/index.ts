@@ -1,4 +1,4 @@
-export type VideoCategory = "gaming" | "podcast";
+export type VideoCategory = "gaming" | "podcast" | "news";
 
 export type VideoStatus =
   | "UPLOADED"
@@ -83,6 +83,8 @@ export interface Transcript {
 
 export type ClipStatus = "PENDING" | "RENDERING" | "READY" | "FAILED";
 export type AspectRatio = "9:16" | "1:1" | "3:4" | "4:3" | "16:9";
+// "news": the crop centered on a 9:16 canvas with the title as a headline (backend services/video/layout.py).
+export type ClipLayout = "full" | "news";
 
 export interface Clip {
   id: string;
@@ -104,6 +106,7 @@ export interface Clip {
   aspect_ratio: AspectRatio;
   crop_x: number | null;
   crop_y: number | null;
+  layout: ClipLayout;
   subtitle_preset_id: string | null;
   subtitle_font_size: number | null;
   subtitle_position_x: number | null;

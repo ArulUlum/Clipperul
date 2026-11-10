@@ -24,6 +24,7 @@ from app.schemas.clip import (
     build_clip_response,
 )
 from app.services.storage.storage_service import storage_service
+from app.services.video import layout
 from app.workers.tasks.clip_render_tasks import activate_clip_render_task, render_clip_task, retrim_clip_task
 
 router = APIRouter(prefix="/clips", tags=["clips"])
@@ -86,12 +87,25 @@ def update_clip(
     if clip is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clip not found")
 
+    # Under the news layout the title is burned into the video as its headline, so a new title
+    # means a re-render. (A clip already rendering picks the title up when its render runs.)
+    rerender = (
+        payload.title is not None
+        and payload.title != clip.title
+        and layout.applies(clip.layout, clip.aspect_ratio.value)
+        and clip.status in (ClipStatus.READY, ClipStatus.FAILED)
+    )
     if payload.title is not None:
         clip.title = payload.title
     if payload.caption is not None:
         clip.caption = payload.caption
+    if rerender:
+        clip.status = ClipStatus.RENDERING
 
-    return build_clip_response(repo.update(clip))
+    clip = repo.update(clip)
+    if rerender:
+        retrim_clip_task.delay(str(clip.id))
+    return build_clip_response(clip)
 
 
 @router.post("/{clip_id}/trim", response_model=ClipResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -212,6 +226,8 @@ def apply_clip_edits(
     clip.aspect_ratio = payload.aspect_ratio
     clip.crop_x = payload.crop_x
     clip.crop_y = payload.crop_y
+    if payload.layout is not None:
+        clip.layout = payload.layout
     clip.subtitle_preset_id = payload.subtitle_preset_id
     clip.subtitle_font_size = payload.subtitle_font_size
     clip.subtitle_position_x = payload.subtitle_position_x

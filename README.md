@@ -12,13 +12,25 @@ once a day with the optional [daily auto clip](#daily-auto-clip-optional).
 - **Upload** a video file directly, or paste a YouTube / direct-file URL — no local download needed.
 - **Transcribe & analyze**: Whisper transcribes the audio, then an LLM (OpenAI-compatible, Anthropic,
   Gemini, or a local Ollama model — your choice) detects the video's category (Gaming or Podcast)
-  and scores candidate moments on hook, flow, value and trend.
+  and scores candidate moments on hook, flow, value and trend. Categories are Gaming, Podcast and
+  News — News is for whatever is being talked about right now (speeches by officials, podcasts,
+  influencers) and picks the moments about where the country is heading, programs and policies,
+  and critical, revealing or quotable statements, skipping ceremonial openings and host chatter.
 - **Generate clips**: the best non-overlapping moments are cut and cropped to a vertical format
   (9:16 by default, 3:4 for widescreen sources; switchable to 1:1 or 4:3) with face-tracking smart
   crop, and get subtitles burned in using a category-matched preset.
-- **Titles in the video's language**: one LLM call per video writes a short, hook-style title for
-  every clip (around 60 characters, built only from what is said in the clip). An Indonesian video gets
-  Indonesian titles, and so on.
+- **Titles and captions in the video's language**: one LLM call per video writes, for every clip, a
+  short hook-style title (around 60 characters), a caption that gives the point of the clip and ends
+  with a question to the viewer (to draw comments), and 3–5 hashtags about the clip's own topic —
+  plus one "follow for more" line shared by the video's clips. Everything is built only from what is
+  said in the clip. An Indonesian video gets Indonesian titles and captions, and so on. Clips are
+  steered toward 20–45 seconds, ending right after the payoff, since short clips that are watched to
+  the end and replayed do best in short-form feeds.
+- **News layout** (optional, per clip): the cropped 1:1 / 3:4 / 4:3 clip sits in the middle of a
+  full-screen 9:16 video over a blurred copy of itself, with the title as a red headline just above
+  it and the subtitles just below — so it fills a vertical feed instead of playing as a small box,
+  and the hook is on screen from the first frame. Pick it in the editor's Ratio tab; the daily auto
+  clip uses it. Changing the title of such a clip re-renders it, since the headline is burned in.
 - **Review & edit** in a tabbed clip editor — **Trim, Ratio, Crop, Subtitles, Details, Post** — with
   a live, no-round-trip preview. Adjust anything, save once, and the clip is re-rendered.
 - **Post from the editor** (the **Post** tab, right next to Details): pick one or more connected
@@ -153,8 +165,13 @@ timezone), it:
 
 1. picks a trending YouTube video for the category and country you selected (Podcast, Gaming,
    Entertainment, News, ...), skipping live streams and videos outside 8–75 minutes — and **never a
-   video it has already used** (videos you uploaded yourself by link count as used too);
-2. clips it to **1:1 with auto-track off** (a fixed center crop);
+   video it has already used** (videos you uploaded yourself by link count as used too). **News**
+   takes what's hot right now: YouTube's News & Politics chart plus searches of the last 72 hours
+   for speeches by presidents and ministers, podcasts, and interviews / clarifications / influencer
+   talk (Indonesian queries for `ID`, local-language or English ones elsewhere), and picks the one
+   gaining the most views per hour;
+2. clips it to **1:1 with auto-track off** (a fixed center crop) in the **news layout** (full-screen
+   9:16 with the title as a headline);
 3. posts the best clips to your connected accounts that can publish (YouTube, plus TikTok/Instagram
    connected through Zernio) — **one at a time per platform**, waiting a **random 60–90 minutes**
    between uploads to the same platform. Platforms go in parallel, so each clip appears on all of

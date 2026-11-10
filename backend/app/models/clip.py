@@ -42,6 +42,9 @@ class Clip(Base, UUIDPKMixin, TimestampMixin):
     # automatically". Set together or not at all; used when smart-crop picks the wrong subject.
     crop_x: Mapped[float | None] = mapped_column(Float, nullable=True)
     crop_y: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # "full" (the crop fills the frame) or "news" (the crop centered on a 9:16 canvas with the title
+    # as a headline above it — see app/services/video/layout.py). Baked into the plain render.
+    layout: Mapped[str] = mapped_column(String(20), nullable=False, default="full", server_default="full")
     # The clip's CURRENT subtitle configuration — null preset_id means "no subtitles". Distinct
     # from ClipRender's own font_size/position_x/position_y (which record what a past render
     # used); these are what the editor currently has selected and what the next full re-render

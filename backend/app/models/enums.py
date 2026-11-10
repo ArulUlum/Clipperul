@@ -4,6 +4,7 @@ import enum
 class VideoCategory(str, enum.Enum):
     GAMING = "gaming"
     PODCAST = "podcast"
+    NEWS = "news"
 
 
 class VideoStatus(str, enum.Enum):

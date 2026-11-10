@@ -25,6 +25,17 @@ _UPLOAD_TIMEOUT = 1800  # video PUT can legitimately take a while on a slow conn
 _UPLOAD_CHUNK_SIZE = 4 * 256 * 1024
 
 
+class YouTubeAuthExpired(Exception):
+    """Google rejected the stored refresh token (expired or revoked) — only reconnecting fixes it."""
+
+
+def _error_code(response: requests.Response) -> str | None:
+    try:
+        return response.json().get("error")
+    except (ValueError, AttributeError):
+        return None
+
+
 class YouTubeProvider(SocialMediaProvider):
     """YouTube Shorts adapter — OAuth via Google's standard authorization-code flow, uploads
     via the YouTube Data API v3 resumable upload protocol. Uses `requests` directly rather
@@ -123,6 +134,10 @@ class YouTubeProvider(SocialMediaProvider):
                 },
                 timeout=_REQUEST_TIMEOUT,
             )
+            if response.status_code == 400 and _error_code(response) == "invalid_grant":
+                raise YouTubeAuthExpired(
+                    "YouTube authorization expired or was revoked — reconnect the YouTube account."
+                )
             response.raise_for_status()
             token_data = response.json()
             account.encrypted_access_token = encrypt_token(token_data["access_token"])

@@ -9,7 +9,7 @@ import { Select } from "@/components/ui/select";
 import { ClipPostPanel } from "@/features/scheduled-posts/ClipPostPanel";
 import { api, ApiError, getVideoDownloadUrl } from "@/lib/api";
 import useSWR from "@/lib/useSWR";
-import type { AspectRatio, Clip, SubtitlePreset, TranscriptSegment } from "@/types";
+import type { AspectRatio, Clip, ClipLayout, SubtitlePreset, TranscriptSegment } from "@/types";
 
 const POLL_MS = 3000;
 type EditorTab = "trim" | "ratio" | "crop" | "subtitles" | "details" | "post";
@@ -36,6 +36,36 @@ const ASPECT_RATIO_REF_WIDTH: Record<AspectRatio, number> = {
 };
 const PREVIEW_WIDTH_PX = 256; // matches the w-64 preview container below
 
+// The "news" layout, mirroring backend/app/services/video/layout.py: the crop fills the width of a
+// 1080x1920 canvas, vertically centered; the title sits just above it, the subtitles just below.
+const CANVAS_W = 1080;
+const CANVAS_H = 1920;
+const ASPECT_RATIO_SIZE: Record<AspectRatio, [number, number]> = {
+  "9:16": [1080, 1920], "3:4": [1080, 1440], "1:1": [1080, 1080], "4:3": [1440, 1080], "16:9": [1920, 1080],
+};
+const HEADLINE_MARGIN_X = 70;
+const HEADLINE_GAP = 40;
+const SUBTITLE_GAP = 110;
+const HEADLINE_BOX_COLOR = "#D7261E";
+
+const newsApplies = (layout: ClipLayout, ratio: AspectRatio) => layout === "news" && ratio !== "9:16";
+
+function newsBox(ratio: AspectRatio) {
+  const [w, h] = ASPECT_RATIO_SIZE[ratio];
+  const height = Math.round((CANVAS_W * h) / w / 2) * 2;
+  return { height, top: Math.floor((CANVAS_H - height) / 2) };
+}
+
+const headlineFontSize = (top: number) => Math.max(40, Math.min(72, Math.floor(top / 5)));
+
+// Where subtitles go when the user hasn't moved them: just below the clip under the news layout.
+function defaultSubY(layout: ClipLayout, ratio: AspectRatio): number {
+  if (!newsApplies(layout, ratio)) return DEFAULT_SUB_Y;
+  const { height, top } = newsBox(ratio);
+  const bottom = top + height;
+  return Math.round((Math.min(bottom + SUBTITLE_GAP, (bottom + CANVAS_H) / 2) / CANVAS_H) * 10000) / 100;
+}
+
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds)) return "0:00";
   const m = Math.floor(seconds / 60);
@@ -61,6 +91,7 @@ export function ClipPreviewModal({
   const [trimStart, setTrimStart] = useState(clip.start_time);
   const [trimEnd, setTrimEnd] = useState(clip.end_time);
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>(clip.aspect_ratio);
+  const [clipLayout, setClipLayout] = useState<ClipLayout>(clip.layout ?? "full");
   const [cropOverride, setCropOverride] = useState(clip.crop_x !== null && clip.crop_y !== null);
   const [cropX, setCropX] = useState(clip.crop_x ?? 50);
   const [cropY, setCropY] = useState(clip.crop_y ?? 50);
@@ -68,7 +99,18 @@ export function ClipPreviewModal({
   const [subtitlePresetId, setSubtitlePresetId] = useState(clip.subtitle_preset_id ?? "");
   const [fontSize, setFontSize] = useState(clip.subtitle_font_size ?? DEFAULT_FONT_SIZE);
   const [subPositionX, setSubPositionX] = useState(clip.subtitle_position_x ?? DEFAULT_SUB_X);
-  const [subPositionY, setSubPositionY] = useState(clip.subtitle_position_y ?? DEFAULT_SUB_Y);
+  const [subPositionY, setSubPositionY] = useState(
+    clip.subtitle_position_y ?? defaultSubY(clip.layout ?? "full", clip.aspect_ratio)
+  );
+
+  // Switching layout or ratio moves the subtitles along to the new default spot — unless the user
+  // has already placed them somewhere of their own.
+  const subDefaultY = defaultSubY(clipLayout, aspectRatio);
+  const prevSubDefaultY = useRef(subDefaultY);
+  useEffect(() => {
+    if (near(subPositionY, prevSubDefaultY.current)) setSubPositionY(subDefaultY);
+    prevSubDefaultY.current = subDefaultY;
+  }, [subDefaultY, subPositionY]);
 
   // The last server-confirmed state of this clip. The `clip` prop goes stale after a save
   // (parents don't re-pass it), so "do the on-screen edits differ from what's rendered?"
@@ -174,6 +216,7 @@ export function ClipPreviewModal({
         start_time: trimStart,
         end_time: trimEnd,
         aspect_ratio: aspectRatio,
+        layout: clipLayout,
         ...(cropOverride ? { crop_x: cropX, crop_y: cropY } : {}),
         ...(subtitlesEnabled && subtitlePresetId
           ? {
@@ -211,11 +254,15 @@ export function ClipPreviewModal({
       (subtitlePresetId !== savedClip.subtitle_preset_id ||
         !near(fontSize, savedClip.subtitle_font_size ?? DEFAULT_FONT_SIZE) ||
         !near(subPositionX, savedClip.subtitle_position_x ?? DEFAULT_SUB_X) ||
-        !near(subPositionY, savedClip.subtitle_position_y ?? DEFAULT_SUB_Y)));
+        !near(
+          subPositionY,
+          savedClip.subtitle_position_y ?? defaultSubY(savedClip.layout ?? "full", savedClip.aspect_ratio)
+        )));
   const hasUnsavedEdits =
     !near(trimStart, savedClip.start_time) ||
     !near(trimEnd, savedClip.end_time) ||
     aspectRatio !== savedClip.aspect_ratio ||
+    clipLayout !== (savedClip.layout ?? "full") ||
     cropDirty ||
     subtitlesDirty;
 
@@ -229,7 +276,10 @@ export function ClipPreviewModal({
         ? "This clip isn't ready to post (its last render didn't finish)."
         : null;
 
-  const previewScale = PREVIEW_WIDTH_PX / ASPECT_RATIO_REF_WIDTH[aspectRatio];
+  const newsActive = newsApplies(clipLayout, aspectRatio);
+  const box = newsBox(aspectRatio);
+  const previewScale = PREVIEW_WIDTH_PX / (newsActive ? CANVAS_W : ASPECT_RATIO_REF_WIDTH[aspectRatio]);
+  const savedTitleIsHeadline = newsApplies(savedClip.layout ?? "full", savedClip.aspect_ratio);
   const activeCueText = useMemo(() => {
     if (!subtitlesEnabled || !transcript?.segments) return null;
     const cue = transcript.segments.find(
@@ -244,27 +294,60 @@ export function ClipPreviewModal({
         <div className="flex w-64 shrink-0 flex-col gap-2">
           <div
             className="relative w-full overflow-hidden rounded-md bg-black"
-            style={{ aspectRatio: ASPECT_RATIO_CSS[aspectRatio] }}
+            style={{ aspectRatio: newsActive ? "9/16" : ASPECT_RATIO_CSS[aspectRatio] }}
           >
-            {sourceUrl ? (
-              <video
-                ref={videoRef}
-                key={sourceUrl}
-                className="h-full w-full"
-                style={{ objectFit: "cover", objectPosition: `${cropX}% ${cropY}%` }}
-                src={sourceUrl}
-                onLoadedMetadata={(e) => {
-                  setVideoDuration(e.currentTarget.duration);
-                  e.currentTarget.currentTime = trimStart;
+            {/* Same element in both layouts, so switching doesn't reload the video. The real render
+                puts a blurred, darkened copy of the clip behind it; the preview keeps that black. */}
+            <div
+              className="absolute inset-x-0"
+              style={
+                newsActive
+                  ? { top: `${(box.top / CANVAS_H) * 100}%`, height: `${(box.height / CANVAS_H) * 100}%` }
+                  : { top: 0, bottom: 0 }
+              }
+            >
+              {sourceUrl ? (
+                <video
+                  ref={videoRef}
+                  key={sourceUrl}
+                  className="h-full w-full"
+                  style={{ objectFit: "cover", objectPosition: `${cropX}% ${cropY}%` }}
+                  src={sourceUrl}
+                  onLoadedMetadata={(e) => {
+                    setVideoDuration(e.currentTarget.duration);
+                    e.currentTarget.currentTime = trimStart;
+                  }}
+                  onTimeUpdate={handleTimeUpdate}
+                  onPlay={() => setPlaying(true)}
+                  onPause={() => setPlaying(false)}
+                />
+              ) : (
+                <span className="absolute inset-0 flex items-center justify-center text-xs text-white/60">
+                  Loading preview...
+                </span>
+              )}
+            </div>
+            {newsActive && title.trim() && (
+              <div
+                className="pointer-events-none absolute text-center font-bold leading-snug text-white"
+                style={{
+                  left: `${(HEADLINE_MARGIN_X / CANVAS_W) * 100}%`,
+                  right: `${(HEADLINE_MARGIN_X / CANVAS_W) * 100}%`,
+                  bottom: `${((CANVAS_H - (box.top - HEADLINE_GAP)) / CANVAS_H) * 100}%`,
+                  fontSize: `${headlineFontSize(box.top) * previewScale}px`,
                 }}
-                onTimeUpdate={handleTimeUpdate}
-                onPlay={() => setPlaying(true)}
-                onPause={() => setPlaying(false)}
-              />
-            ) : (
-              <span className="absolute inset-0 flex items-center justify-center text-xs text-white/60">
-                Loading preview...
-              </span>
+              >
+                <span
+                  style={{
+                    background: HEADLINE_BOX_COLOR,
+                    padding: `0 ${14 * previewScale}px`,
+                    boxDecorationBreak: "clone",
+                    WebkitBoxDecorationBreak: "clone",
+                  }}
+                >
+                  {title}
+                </span>
+              </div>
             )}
             {activeCueText && (
               <div
@@ -370,6 +453,32 @@ export function ClipPreviewModal({
                     </Button>
                   ))}
                 </div>
+                <p className="pt-2 text-xs text-muted-foreground">Layout</p>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={clipLayout === "full" ? "default" : "outline"}
+                    disabled={applying}
+                    onClick={() => setClipLayout("full")}
+                  >
+                    Full frame
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={clipLayout === "news" ? "default" : "outline"}
+                    disabled={applying}
+                    onClick={() => setClipLayout("news")}
+                  >
+                    News: 9:16 with headline
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {clipLayout === "news" && aspectRatio === "9:16"
+                    ? "A 9:16 clip already fills the screen, so the news layout only changes 1:1, 3:4 and 4:3 clips."
+                    : "News places the clip in the middle of a full-screen 9:16 video, with the title as a headline above it and the subtitles below."}
+                </p>
               </div>
             )}
 
@@ -501,6 +610,11 @@ export function ClipPreviewModal({
                 <div className="space-y-1.5">
                   <Label htmlFor="title">Title</Label>
                   <Input id="title" value={title} onChange={(e) => setTitle(e.target.value)} />
+                  {savedTitleIsHeadline && (
+                    <p className="text-xs text-muted-foreground">
+                      This title is the headline on the video, so saving a new one re-renders the clip.
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-1.5">
@@ -543,7 +657,7 @@ export function ClipPreviewModal({
             <div>
               <p className="text-sm font-medium">Save edits</p>
               <p className="text-xs text-muted-foreground">
-                {applying ? "Rendering your changes..." : "Applies trim, ratio, crop and subtitles together."}
+                {applying ? "Rendering your changes..." : "Applies trim, ratio, layout, crop and subtitles together."}
               </p>
               {applyError && <p className="text-xs text-destructive">{applyError}</p>}
             </div>

@@ -2,8 +2,10 @@ import pytest
 
 from app.services.ai.llm import LLMProvider
 from app.services.ai.title_service import (
-    MAX_TITLE_CHARS, ClipTitleInput, build_excerpt, clean_title, generate_clip_titles,
+    MAX_TITLE_CHARS, ClipCopy, ClipTitleInput, build_excerpt, clean_caption, clean_hashtags, clean_title,
+    generate_clip_copy, generate_clip_titles,
 )
+from app.workers.tasks.video_tasks import _compose_caption
 from app.services.ai.transcription import TranscriptSegmentResult
 
 
@@ -117,6 +119,55 @@ def test_no_clips_means_no_call():
     assert generate_clip_titles([], language="id", category="podcast", llm=llm) == {}
 
 
+def test_copy_carries_caption_topic_hashtags_and_one_cta():
+    llm = FakeLLM({
+        "cta": "Follow untuk potongan berikutnya #fyp",
+        "titles": [
+            {"index": 0, "title": "Alat sadap buat siapa?", "caption": "Alat sadap ratusan miliar dibeli. Setuju?",
+             "hashtags": ["#Penyadapan", "pegasus", "#fyp", "#viral", "dua kata", "#penyadapan", 5]},
+            {"index": 1, "title": "Alat sadap buat siapa?", "caption": "Caption kedua, benar?", "hashtags": []},
+        ],
+    })
+    copy = generate_clip_copy(_clips(), language="id", category="news", llm=llm)
+
+    assert copy.cta == "Follow untuk potongan berikutnya"  # hashtags never ride along in the CTA
+    first = copy.clips[0]
+    assert first.title == "Alat sadap buat siapa?"
+    assert first.caption == "Alat sadap ratusan miliar dibeli. Setuju?"
+    assert first.hashtags == ("#penyadapan", "#pegasus")  # lowercased, generic/invalid/duplicate dropped
+    # the duplicate title is dropped, but that clip still keeps its caption
+    assert copy.clips[1].title is None and copy.clips[1].caption == "Caption kedua, benar?"
+    assert 2 not in copy.clips
+
+
+def test_old_style_title_only_responses_still_work():
+    copy = generate_clip_copy(_clips(1), language="id", category="news", llm=FakeLLM(_titles((0, "Judul"))))
+    assert copy.clips[0] == ClipCopy(title="Judul") and copy.cta is None
+
+
+@pytest.mark.parametrize("raw", [None, 3, "", "   ", "x" * 301, "hook_score"])
+def test_unusable_captions_are_dropped(raw):
+    assert clean_caption(raw) is None
+
+
+def test_caption_keeps_quotes_but_not_hashtags():
+    assert clean_caption('dia bilang "tergantung kopi" #prabowo\nsetuju?') == 'Dia bilang "tergantung kopi" setuju?'
+
+
+def test_hashtags_are_capped_at_five():
+    assert len(clean_hashtags([f"tag{i}" for i in range(9)])) == 5
+
+
+def test_prompt_asks_for_a_question_and_bans_speaker_narration():
+    llm = FakeLLM(_titles((0, "A")))
+    generate_clip_copy(_clips(1), language="id", category="news", llm=llm)
+    user = llm.user.lower()
+    assert "question to the viewer" in user
+    assert "pembicara menjelaskan" in user  # named as the narration to avoid
+    assert "name a person only if the excerpt itself names them" in user
+    assert '"cta"' in llm.user and '"hashtags"' in llm.user
+
+
 def test_excerpt_takes_only_the_clips_own_transcript_and_is_capped():
     segs = [
         TranscriptSegmentResult(0, 10, "sebelum clip"),
@@ -126,3 +177,15 @@ def test_excerpt_takes_only_the_clips_own_transcript_and_is_capped():
     ]
     assert build_excerpt(segs, 11, 29) == "isi clip pertama isi clip kedua"
     assert len(build_excerpt(segs, 0, 50, limit=15)) == 15
+
+
+def test_composed_caption_is_hook_then_cta_then_topic_and_category_tags():
+    clip = ClipCopy(title="T", caption="Alat sadap dibeli rakyat. Setuju?", hashtags=("#penyadapan", "#shorts"))
+    assert _compose_caption(clip, "Follow untuk potongan berikutnya", "reason", "news") == (
+        "Alat sadap dibeli rakyat. Setuju?\n\nFollow untuk potongan berikutnya\n\n#penyadapan #shorts #news"
+    )
+
+
+def test_composed_caption_falls_back_to_the_reason_and_stock_tags():
+    assert _compose_caption(None, None, "Pembicara menjelaskan X.", "news") == "Pembicara menjelaskan X.\n\n#news #shorts #trending"
+    assert _compose_caption(ClipCopy(title="T"), "Follow ya", "R", "podcast") == "R\n\nFollow ya\n\n#podcast #shorts #podcastclips"

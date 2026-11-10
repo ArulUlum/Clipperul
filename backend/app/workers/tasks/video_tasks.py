@@ -19,10 +19,10 @@ from app.services.ai.category_detection import detect_video_category
 from app.services.ai.glossary import correct_transcription
 from app.services.ai.highlight_service import SelectedHighlight, find_and_select_highlights
 from app.services.ai.llm import get_llm_provider
-from app.services.ai.title_service import ClipTitleInput, build_excerpt, generate_clip_titles
+from app.services.ai.title_service import ClipCopy, ClipTitleInput, build_excerpt, generate_clip_copy
 from app.services.ai.transcription import get_transcription_provider
 from app.services.storage.storage_service import storage_service
-from app.services.video import pipeline, smart_crop
+from app.services.video import layout, pipeline, smart_crop
 from app.services.video.analysis import compute_audio_energy, detect_scene_changes
 from app.services.video.analysis_types import VideoAnalysisInput
 from app.services.video.downloader import download_video_from_url
@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 _CATEGORY_HASHTAGS = {
     "gaming": "#gaming #shorts #gamingclips",
     "podcast": "#podcast #shorts #podcastclips",
+    "news": "#news #shorts #trending",
 }
 
 _CATEGORY_PRESET_NAMES = {
@@ -92,10 +93,16 @@ def _auto_title(text: str, reason: str, index: int) -> str:
     return title[0].upper() + title[1:] if title else f"Highlight #{index + 1}"
 
 
-def _auto_caption(reason: str, category: str) -> str:
-    hashtags = _CATEGORY_HASHTAGS.get(category, "#shorts")
-    reason = (reason or "").strip()
-    return f"{reason}\n\n{hashtags}".strip()
+def _compose_caption(clip_copy: ClipCopy | None, cta: str | None, reason: str, category: str) -> str:
+    """Caption (hook + a question to the viewer), the follow CTA, then hashtags: the clip's own topic
+    tags plus the category tag and #shorts. Without an LLM caption the highlight's reason stands in,
+    with the category's stock hashtags if there are no topic tags either."""
+    body = (clip_copy.caption if clip_copy and clip_copy.caption else None) or (reason or "").strip()
+    if clip_copy and clip_copy.hashtags:
+        hashtags = " ".join(dict.fromkeys([*clip_copy.hashtags, f"#{category}", "#shorts"]))
+    else:
+        hashtags = _CATEGORY_HASHTAGS.get(category, "#shorts")
+    return "\n\n".join(part for part in (body, cta, hashtags) if part)
 
 
 _SIXTEEN_NINE_RATIO = 16 / 9
@@ -197,9 +204,9 @@ def process_video(self, job_id: str) -> None:
         keywords = get_strategy(video.category).keyword_list() if default_preset is not None else []
         default_aspect_ratio = video.clip_aspect_ratio or _default_clip_aspect_ratio(original_path)
 
-        # One LLM call writes a short, catchy title for every clip (in the video's language); any
-        # clip it can't title falls back to the plain truncated-reason title below.
-        titles = generate_clip_titles(
+        # One LLM call writes the title, caption and topic hashtags for every clip (in the video's
+        # language) plus one follow CTA; anything it can't write falls back to the reason below.
+        video_copy = generate_clip_copy(
             [
                 ClipTitleInput(index=i, excerpt=build_excerpt(transcription.segments, h.start, h.end), reason=h.reason)
                 for i, h in enumerate(highlights)
@@ -209,22 +216,31 @@ def process_video(self, job_id: str) -> None:
             llm=get_llm_provider(),
         )
 
+        clip_layout = video.clip_layout or layout.FULL
         for index, highlight in enumerate(highlights):
             trimmed_local_path = str(Path(tmpdir) / f"clip_{index}_trimmed.mp4")
-            clip_local_path = str(Path(tmpdir) / f"clip_{index}.mp4")
+            cropped_local_path = str(Path(tmpdir) / f"clip_{index}_cropped.mp4")
             thumb_local_path = str(Path(tmpdir) / f"clip_{index}.jpg")
+            clip_copy = video_copy.clips.get(index)
+            clip_title = (clip_copy.title if clip_copy else None) or _auto_title(highlight.text, highlight.reason, index)
 
             pipeline.trim_clip(original_path, highlight.start, highlight.end, trimmed_local_path)
             target_w, target_h = pipeline.get_target_dimensions(default_aspect_ratio.value)
             if video.auto_track:
-                smart_crop.generate_smart_cropped_clip(trimmed_local_path, clip_local_path, target_w, target_h)
+                smart_crop.generate_smart_cropped_clip(trimmed_local_path, cropped_local_path, target_w, target_h)
             else:
                 # Auto-track off: a fixed center crop. The clip also stores it as a manual crop
                 # position below, so later re-renders (trim/ratio edits) don't switch tracking
                 # back on.
                 pipeline.crop_and_scale_positioned(
-                    trimmed_local_path, clip_local_path, target_w, target_h, 50.0, 50.0
+                    trimmed_local_path, cropped_local_path, target_w, target_h, 50.0, 50.0
                 )
+            # The plain render: the crop as is, or composed into the news layout.
+            clip_local_path = layout.apply(
+                clip_layout, cropped_local_path, str(Path(tmpdir) / f"clip_{index}.mp4"),
+                clip_title, default_aspect_ratio.value,
+            )
+            sub_x, sub_y = layout.subtitle_position(clip_layout, default_aspect_ratio.value, None, None)
 
             # Auto-subtitles: burn the category's default preset into the clip that becomes
             # the primary/downloadable version, but keep the plain cut around as a fallback
@@ -240,7 +256,10 @@ def process_video(self, job_id: str) -> None:
                 if cues:
                     try:
                         video_width, video_height = pipeline.get_video_dimensions(clip_local_path)
-                        ass_content = build_ass_subtitle(cues, default_preset.config, keywords, video_width, video_height)
+                        ass_content = build_ass_subtitle(
+                            cues, default_preset.config, keywords, video_width, video_height,
+                            position_x_pct=sub_x, position_y_pct=sub_y,
+                        )
                         ass_path = str(Path(tmpdir) / f"clip_{index}.ass")
                         Path(ass_path).write_text(ass_content, encoding="utf-8")
 
@@ -262,8 +281,8 @@ def process_video(self, job_id: str) -> None:
 
             clip = Clip(
                 video_id=video.id,
-                title=titles.get(index) or _auto_title(highlight.text, highlight.reason, index),
-                caption=_auto_caption(highlight.reason, video.category.value),
+                title=clip_title,
+                caption=_compose_caption(clip_copy, video_copy.cta, highlight.reason, video.category.value),
                 start_time=highlight.start,
                 end_time=highlight.end,
                 score=highlight.score,
@@ -281,6 +300,7 @@ def process_video(self, job_id: str) -> None:
                 aspect_ratio=default_aspect_ratio,
                 crop_x=None if video.auto_track else 50.0,
                 crop_y=None if video.auto_track else 50.0,
+                layout=clip_layout,
                 subtitle_preset_id=applied_preset_id,
             )
             db.add(clip)

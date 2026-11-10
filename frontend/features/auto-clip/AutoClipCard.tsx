@@ -157,8 +157,9 @@ export function AutoClipCard() {
       <CardContent className="space-y-5">
         <p className="text-sm text-muted-foreground">
           Once a day, picks a trending YouTube video in your category (never one it already used), clips it to
-          1:1 with auto-track off, and posts the clips one by one to your connected YouTube accounts —
-          spaced 60–90 minutes apart (random) so the uploads aren't bunched together.
+          1:1 with auto-track off in the news layout (full-screen 9:16 with the title as a headline), and posts
+          the clips to your connected accounts one at a time per platform, 60–90 minutes apart (random) so the
+          uploads aren&apos;t bunched together.
         </p>
 
         {!settings.can_discover && (
