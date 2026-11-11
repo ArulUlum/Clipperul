@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from app.models.clip import Clip, ClipRender
 from app.models.enums import AspectRatio, ClipStatus, VideoCategory
 
-ClipLayout = Literal["full", "news"]  # see app/services/video/layout.py
+ClipLayout = Literal["full", "news", "gaming"]  # see app/services/video/layout.py
 
 
 class ClipResponse(BaseModel):
@@ -31,6 +31,9 @@ class ClipResponse(BaseModel):
     crop_x: float | None
     crop_y: float | None
     layout: ClipLayout
+    facecam_x: float | None
+    facecam_y: float | None
+    facecam_size: float | None
     subtitle_preset_id: UUID | None
     subtitle_font_size: int | None
     subtitle_position_x: float | None
@@ -68,6 +71,9 @@ def build_clip_response(clip: Clip) -> ClipResponse:
         crop_x=clip.crop_x,
         crop_y=clip.crop_y,
         layout=clip.layout,
+        facecam_x=clip.facecam_x,
+        facecam_y=clip.facecam_y,
+        facecam_size=clip.facecam_size,
         subtitle_preset_id=clip.subtitle_preset_id,
         subtitle_font_size=clip.subtitle_font_size,
         subtitle_position_x=clip.subtitle_position_x,
@@ -111,6 +117,11 @@ class ClipApplyEditsRequest(BaseModel):
     crop_y: float | None = None
     # None = keep the clip's current layout.
     layout: ClipLayout | None = None
+    # The gaming layout's face crop (see Clip.facecam_*): all three given = use this one; all None =
+    # detect it on the render. Ignored by the other layouts.
+    facecam_x: float | None = None
+    facecam_y: float | None = None
+    facecam_size: float | None = None
     # None subtitle_preset_id = no subtitles on the result.
     subtitle_preset_id: UUID | None = None
     subtitle_font_size: int | None = None

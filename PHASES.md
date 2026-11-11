@@ -122,6 +122,16 @@ video for the chosen category/country, clips it, and posts the clips to the user
   subtitle presets, trims and crops work on it unchanged; a 9:16 crop is left alone. Since the title
   is burned in, a title change re-renders such a clip. The editor previews it (Ratio tab → Layout),
   mirroring the geometry in TypeScript.
+- **Gaming layout** (`app/services/video/gaming_layout.py`, migration 0021 adds `clips.facecam_*`):
+  Haar face detection at 1 fps on the trimmed clip, detections grouped by position, and the group seen
+  in the most frames (at least a quarter of them) is the facecam. The canvas is split 40/60 with no
+  margins: the face crop has the face area's shape (1080:768), 2.2x the face height tall, with the face
+  in its upper third (a facecam's face is usually near its top, so a centered crop would reach past the
+  cam into the game); the game crop has the game area's shape (1080:1152, nearly square), full height,
+  centered or slid by `crop_x`. Both are scaled to full width and stacked (`vstack`) in one FFmpeg
+  pass, from the uncropped frame; subtitles default to the seam (40%). The facecam is stored on the clip (re-used by later renders; the editor can move it
+  or clear it to detect again); none found = `layout.effective()` renders the clip in the news layout.
+  Uploads take a `clip_layout`; auto-clip runs in the Gaming category use this layout.
 - **Publishing:** best-scoring clips first (capped by "max clips per day"), to every connected account
   that can publish (YouTube, and TikTok/Instagram via Zernio — `SocialMediaProvider.can_publish`),
   **one upload at a time per platform**: a platform's next upload starts only once its previous post

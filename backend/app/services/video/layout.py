@@ -1,4 +1,7 @@
-"""The "news" clip layout: the cropped clip sits in the middle of a full 9:16 canvas over a blurred,
+"""Clip layouts beyond the plain crop. "gaming" (facecam above the game) lives in gaming_layout.py;
+this module holds the "news" one and the rules shared by both.
+
+The "news" clip layout: the cropped clip sits in the middle of a full 9:16 canvas over a blurred,
 darkened copy of itself, with the clip's title as a headline in the band above it and the subtitles
 in the band below.
 
@@ -10,11 +13,12 @@ The composed video is what the rest of the pipeline treats as the clip's plain r
 burned on top of it in canvas coordinates, exactly as for any other clip."""
 from pathlib import Path
 
-from app.services.video import pipeline
+from app.services.video import gaming_layout, pipeline
 
 FULL = "full"
 NEWS = "news"
-LAYOUTS = (FULL, NEWS)
+GAMING = "gaming"
+LAYOUTS = (FULL, NEWS, GAMING)
 
 CANVAS_W, CANVAS_H = 1080, 1920
 _HEADLINE_MARGIN_X = 70
@@ -26,6 +30,14 @@ _HEADLINE_GAP = 40  # between the headline's last line and the clip
 _SUBTITLE_GAP = 110  # from the clip's bottom edge to the subtitle's center
 _HEADLINE_COLOR = "&H00FFFFFF"  # white text
 _HEADLINE_BOX = "&H001E26D7"  # red box behind it (#D7261E, ASS is BGR)
+
+
+def effective(layout: str | None, has_facecam: bool) -> str:
+    """The layout a clip is actually rendered in: the gaming layout needs a facecam, and a clip
+    without one (pure gameplay, or the face wasn't found) gets the news layout instead."""
+    if layout == GAMING:
+        return GAMING if has_facecam else NEWS
+    return layout or FULL
 
 
 def applies(layout: str | None, aspect_ratio: str) -> bool:
@@ -118,10 +130,13 @@ def apply(layout: str | None, cropped_path: str, output_path: str, title: str, a
 def subtitle_position(
     layout: str | None, aspect_ratio: str, position_x: float | None, position_y: float | None
 ) -> tuple[float | None, float | None]:
-    """The user's own subtitle position if they set one; under the news layout, the band below the
-    clip otherwise (the presets' own placement is measured for a full-frame clip)."""
+    """The user's own subtitle position if they set one. Otherwise: under the news layout, the band
+    below the clip; under the gaming layout, the seam between the face and the game (the presets' own
+    placement is measured for a full-frame clip). `layout` is the effective one."""
     if position_x is not None and position_y is not None:
         return position_x, position_y
+    if layout == GAMING:
+        return 50.0, round(gaming_layout.FACE_H / gaming_layout.CANVAS_H * 100, 2)
     if applies(layout, aspect_ratio):
         return 50.0, subtitle_center_pct(aspect_ratio)
     return None, None

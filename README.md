@@ -31,6 +31,12 @@ once a day with the optional [daily auto clip](#daily-auto-clip-optional).
   it and the subtitles just below — so it fills a vertical feed instead of playing as a small box,
   and the hook is on screen from the first frame. Pick it in the editor's Ratio tab; the daily auto
   clip uses it. Changing the title of such a clip re-renders it, since the headline is burned in.
+- **Gaming layout** (optional, per clip): for streams with a facecam. The streamer's face is found by
+  face detection (the steady face wins, so a character in the game can't take its place) and fills
+  the top 40% of a full-screen 9:16 video; the game fills the bottom 60%. Each part is cropped at its
+  own shape so nothing is left over, and the subtitles sit on the seam. The face and game crops can be
+  adjusted in the editor's Crop tab; a clip with no face found gets the News layout. Pick it at upload
+  or in the editor; the daily auto clip uses it for the Gaming category.
 - **Review & edit** in a tabbed clip editor — **Trim, Ratio, Crop, Subtitles, Details, Post** — with
   a live, no-round-trip preview. Adjust anything, save once, and the clip is re-rendered.
 - **Post from the editor** (the **Post** tab, right next to Details): pick one or more connected

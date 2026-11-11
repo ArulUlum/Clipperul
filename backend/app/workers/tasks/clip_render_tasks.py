@@ -14,7 +14,7 @@ from app.models.transcript import Transcript, TranscriptSegment
 from app.models.video import Video
 from app.services.ai.categories.registry import get_strategy
 from app.services.storage.storage_service import storage_service
-from app.services.video import layout, pipeline, smart_crop
+from app.services.video import gaming_layout, layout, pipeline, smart_crop
 from app.services.video.exceptions import PipelineError
 from app.services.video.subtitles import build_ass_subtitle, cues_from_segments
 from app.workers.celery_app import celery_app
@@ -101,7 +101,8 @@ def render_clip_task(self, render_id: str) -> None:
             keywords = get_strategy(clip.category).keyword_list() if cues else []
             video_width, video_height = pipeline.get_video_dimensions(clip_local_path)
             sub_x, sub_y = layout.subtitle_position(
-                clip.layout, clip.aspect_ratio.value, render.position_x, render.position_y
+                layout.effective(clip.layout, clip.facecam_x is not None), clip.aspect_ratio.value,
+                render.position_x, render.position_y,
             )
             ass_content = build_ass_subtitle(
                 cues, preset.config, keywords, video_width, video_height,
@@ -165,18 +166,35 @@ def retrim_clip_task(self, clip_id: str) -> None:
         trimmed_path = str(Path(tmpdir) / "trimmed.mp4")
         pipeline.trim_clip(original_path, clip.start_time, clip.end_time, trimmed_path)
 
-        target_w, target_h = pipeline.get_target_dimensions(clip.aspect_ratio.value)
-        crop_only_path = str(Path(tmpdir) / "crop_only.mp4")
-        if clip.crop_x is not None and clip.crop_y is not None:
-            # Manual override — user picked this because smart-crop tracked the wrong subject,
-            # so don't fall back to auto-tracking here even on failure.
-            pipeline.crop_and_scale_positioned(trimmed_path, crop_only_path, target_w, target_h, clip.crop_x, clip.crop_y)
-        else:
-            smart_crop.generate_smart_cropped_clip(trimmed_path, crop_only_path, target_w, target_h)
-        # The plain render: the crop as is, or composed into the news layout (with the current title).
-        cropped_path = layout.apply(
-            clip.layout, crop_only_path, str(Path(tmpdir) / "cropped.mp4"), clip.title, clip.aspect_ratio.value
-        )
+        cropped_path = str(Path(tmpdir) / "cropped.mp4")
+        # The gaming layout crops the face and the game from the uncropped frame itself: with the
+        # facecam stored on the clip (detected earlier or set in the editor), or detected now.
+        facecam = None
+        if clip.layout == layout.GAMING:
+            stored = None
+            if None not in (clip.facecam_x, clip.facecam_y, clip.facecam_size):
+                stored = gaming_layout.Facecam(clip.facecam_x, clip.facecam_y, clip.facecam_size)
+            facecam = gaming_layout.render(trimmed_path, cropped_path, stored, clip.crop_x)
+            clip.facecam_x = facecam.x if facecam else None
+            clip.facecam_y = facecam.y if facecam else None
+            clip.facecam_size = facecam.size if facecam else None
+        effective_layout = layout.effective(clip.layout, facecam is not None)
+
+        if facecam is None:
+            target_w, target_h = pipeline.get_target_dimensions(clip.aspect_ratio.value)
+            crop_only_path = str(Path(tmpdir) / "crop_only.mp4")
+            if clip.crop_x is not None and clip.crop_y is not None:
+                # Manual override — user picked this because smart-crop tracked the wrong subject,
+                # so don't fall back to auto-tracking here even on failure.
+                pipeline.crop_and_scale_positioned(
+                    trimmed_path, crop_only_path, target_w, target_h, clip.crop_x, clip.crop_y
+                )
+            else:
+                smart_crop.generate_smart_cropped_clip(trimmed_path, crop_only_path, target_w, target_h)
+            # The plain render: the crop as is, or composed into the news layout (with the current title).
+            cropped_path = layout.apply(
+                effective_layout, crop_only_path, cropped_path, clip.title, clip.aspect_ratio.value
+            )
 
         # The clip's own subtitle_preset_id/font_size/position_x/position_y are the single
         # source of truth for "what subtitle state should this clip have" — kept in sync by
@@ -215,7 +233,7 @@ def retrim_clip_task(self, clip_id: str) -> None:
                         keywords = get_strategy(clip.category).keyword_list()
                         video_width, video_height = pipeline.get_video_dimensions(cropped_path)
                         sub_x, sub_y = layout.subtitle_position(
-                            clip.layout, clip.aspect_ratio.value, active_position_x, active_position_y
+                            effective_layout, clip.aspect_ratio.value, active_position_x, active_position_y
                         )
                         ass_content = build_ass_subtitle(
                             cues, preset.config, keywords, video_width, video_height,

@@ -24,7 +24,7 @@ from app.schemas.clip import (
     build_clip_response,
 )
 from app.services.storage.storage_service import storage_service
-from app.services.video import layout
+from app.services.video import gaming_layout, layout
 from app.workers.tasks.clip_render_tasks import activate_clip_render_task, render_clip_task, retrim_clip_task
 
 router = APIRouter(prefix="/clips", tags=["clips"])
@@ -46,6 +46,22 @@ def _validate_position_pair(x: float | None, y: float | None) -> None:
         )
     if has_x and not (0 <= x <= 100 and 0 <= y <= 100):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="position_x/position_y must be 0-100")
+
+
+def _validate_facecam(x: float | None, y: float | None, size: float | None) -> None:
+    given = [v is not None for v in (x, y, size)]
+    if any(given) and not all(given):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="facecam_x, facecam_y and facecam_size must be given together"
+        )
+    if all(given) and not (
+        0 <= x <= 100 and 0 <= y <= 100 and gaming_layout.MIN_SIZE_PCT <= size <= gaming_layout.MAX_SIZE_PCT
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"facecam_x/facecam_y must be 0-100 and facecam_size "
+            f"{gaming_layout.MIN_SIZE_PCT:g}-{gaming_layout.MAX_SIZE_PCT:g}",
+        )
 
 
 def _validate_trim_range(start_time: float, end_time: float, video: Video | None) -> float:
@@ -92,7 +108,7 @@ def update_clip(
     rerender = (
         payload.title is not None
         and payload.title != clip.title
-        and layout.applies(clip.layout, clip.aspect_ratio.value)
+        and layout.applies(layout.effective(clip.layout, clip.facecam_x is not None), clip.aspect_ratio.value)
         and clip.status in (ClipStatus.READY, ClipStatus.FAILED)
     )
     if payload.title is not None:
@@ -215,6 +231,7 @@ def apply_clip_edits(
     duration = _validate_trim_range(payload.start_time, payload.end_time, video)
     _validate_position_pair(payload.crop_x, payload.crop_y)
     _validate_position_pair(payload.subtitle_position_x, payload.subtitle_position_y)
+    _validate_facecam(payload.facecam_x, payload.facecam_y, payload.facecam_size)
     if payload.subtitle_font_size is not None and not (8 <= payload.subtitle_font_size <= 200):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="subtitle_font_size must be between 8 and 200")
     if payload.subtitle_preset_id is not None and db.get(SubtitlePreset, payload.subtitle_preset_id) is None:
@@ -228,6 +245,7 @@ def apply_clip_edits(
     clip.crop_y = payload.crop_y
     if payload.layout is not None:
         clip.layout = payload.layout
+    clip.facecam_x, clip.facecam_y, clip.facecam_size = payload.facecam_x, payload.facecam_y, payload.facecam_size
     clip.subtitle_preset_id = payload.subtitle_preset_id
     clip.subtitle_font_size = payload.subtitle_font_size
     clip.subtitle_position_x = payload.subtitle_position_x

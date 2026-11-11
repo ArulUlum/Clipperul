@@ -50,6 +50,38 @@ const HEADLINE_BOX_COLOR = "#D7261E";
 
 const newsApplies = (layout: ClipLayout, ratio: AspectRatio) => layout === "news" && ratio !== "9:16";
 
+// The gaming layout (backend gaming_layout.py): the facecam across the top 40% of the canvas and the
+// game across the bottom 60%, both full width. Without a facecam a clip is rendered in the news layout.
+const GAMING_FACE_H = 768;
+const GAMING_GAME_H = CANVAS_H - GAMING_FACE_H;
+const DEFAULT_FACECAM = { x: 15, y: 80, size: 30 };
+const GAMING_PREVIEW_W = 270;
+const GAMING_PREVIEW_H = 480;
+type Facecam = { x: number; y: number; size: number };
+const effectiveLayout = (layout: ClipLayout, hasFacecam: boolean): ClipLayout =>
+  layout === "gaming" ? (hasFacecam ? "gaming" : "news") : layout;
+const savedFacecam = (c: Clip): Facecam | null =>
+  c.facecam_x !== null && c.facecam_y !== null && c.facecam_size !== null
+    ? { x: c.facecam_x, y: c.facecam_y, size: c.facecam_size }
+    : null;
+
+// A window of the given shape (width / height), `height` tall or as tall as the frame's width allows,
+// centered at (cx%, cy%) of a w x h frame and kept inside it.
+function rectIn(w: number, h: number, cx: number, cy: number, height: number, aspect: number) {
+  let rh = Math.min(height, h);
+  let rw = rh * aspect;
+  if (rw > w) {
+    rw = w;
+    rh = w / aspect;
+  }
+  return {
+    w: rw,
+    h: rh,
+    x: Math.max(0, Math.min(w - rw, (w * cx) / 100 - rw / 2)),
+    y: Math.max(0, Math.min(h - rh, (h * cy) / 100 - rh / 2)),
+  };
+}
+
 function newsBox(ratio: AspectRatio) {
   const [w, h] = ASPECT_RATIO_SIZE[ratio];
   const height = Math.round((CANVAS_W * h) / w / 2) * 2;
@@ -59,11 +91,37 @@ function newsBox(ratio: AspectRatio) {
 const headlineFontSize = (top: number) => Math.max(40, Math.min(72, Math.floor(top / 5)));
 
 // Where subtitles go when the user hasn't moved them: just below the clip under the news layout.
+// `layout` is the effective one; under the gaming layout the subtitles sit on the face/game seam.
 function defaultSubY(layout: ClipLayout, ratio: AspectRatio): number {
+  if (layout === "gaming") return (GAMING_FACE_H / CANVAS_H) * 100;
   if (!newsApplies(layout, ratio)) return DEFAULT_SUB_Y;
   const { height, top } = newsBox(ratio);
   const bottom = top + height;
   return Math.round((Math.min(bottom + SUBTITLE_GAP, (bottom + CANVAS_H) / 2) / CANVAS_H) * 10000) / 100;
+}
+
+function RangeRow({
+  label, value, min, max, disabled, onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  disabled: boolean;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span>{label}</span>
+        <span>{Math.round(value)}%</span>
+      </div>
+      <input
+        type="range" min={min} max={max} value={value} disabled={disabled} className="w-full"
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+    </div>
+  );
 }
 
 function formatTime(seconds: number): string {
@@ -92,6 +150,14 @@ export function ClipPreviewModal({
   const [trimEnd, setTrimEnd] = useState(clip.end_time);
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>(clip.aspect_ratio);
   const [clipLayout, setClipLayout] = useState<ClipLayout>(clip.layout ?? "full");
+  // The facecam crop of the gaming layout: what the last render detected (or the user set); null =
+  // detect it when saving.
+  const [facecam, setFacecam] = useState<Facecam | null>(savedFacecam(clip));
+
+  // The last server-confirmed state of this clip. The `clip` prop goes stale after a save
+  // (parents don't re-pass it), so "do the on-screen edits differ from what's rendered?"
+  // — which the Post tab needs — has to be measured against this instead.
+  const [savedClip, setSavedClip] = useState(clip);
   const [cropOverride, setCropOverride] = useState(clip.crop_x !== null && clip.crop_y !== null);
   const [cropX, setCropX] = useState(clip.crop_x ?? 50);
   const [cropY, setCropY] = useState(clip.crop_y ?? 50);
@@ -100,22 +166,23 @@ export function ClipPreviewModal({
   const [fontSize, setFontSize] = useState(clip.subtitle_font_size ?? DEFAULT_FONT_SIZE);
   const [subPositionX, setSubPositionX] = useState(clip.subtitle_position_x ?? DEFAULT_SUB_X);
   const [subPositionY, setSubPositionY] = useState(
-    clip.subtitle_position_y ?? defaultSubY(clip.layout ?? "full", clip.aspect_ratio)
+    clip.subtitle_position_y ??
+      defaultSubY(effectiveLayout(clip.layout ?? "full", savedFacecam(clip) !== null), clip.aspect_ratio)
   );
 
   // Switching layout or ratio moves the subtitles along to the new default spot — unless the user
   // has already placed them somewhere of their own.
-  const subDefaultY = defaultSubY(clipLayout, aspectRatio);
+  // A clip just switched to gaming is previewed as gaming (the face is detected on save); one whose
+  // last gaming render found no face is shown as what it is, the news layout.
+  const liveLayout =
+    clipLayout === "gaming" && facecam === null && savedClip.layout === "gaming" ? "news" : clipLayout;
+  const subDefaultY = defaultSubY(liveLayout, aspectRatio);
   const prevSubDefaultY = useRef(subDefaultY);
   useEffect(() => {
     if (near(subPositionY, prevSubDefaultY.current)) setSubPositionY(subDefaultY);
     prevSubDefaultY.current = subDefaultY;
   }, [subDefaultY, subPositionY]);
 
-  // The last server-confirmed state of this clip. The `clip` prop goes stale after a save
-  // (parents don't re-pass it), so "do the on-screen edits differ from what's rendered?"
-  // — which the Post tab needs — has to be measured against this instead.
-  const [savedClip, setSavedClip] = useState(clip);
 
   const [applying, setApplying] = useState(clip.status === "RENDERING");
   const [applyError, setApplyError] = useState<string | null>(null);
@@ -217,6 +284,9 @@ export function ClipPreviewModal({
         end_time: trimEnd,
         aspect_ratio: aspectRatio,
         layout: clipLayout,
+        ...(clipLayout === "gaming" && facecam
+          ? { facecam_x: facecam.x, facecam_y: facecam.y, facecam_size: facecam.size }
+          : {}),
         ...(cropOverride ? { crop_x: cropX, crop_y: cropY } : {}),
         ...(subtitlesEnabled && subtitlePresetId
           ? {
@@ -256,13 +326,18 @@ export function ClipPreviewModal({
         !near(subPositionX, savedClip.subtitle_position_x ?? DEFAULT_SUB_X) ||
         !near(
           subPositionY,
-          savedClip.subtitle_position_y ?? defaultSubY(savedClip.layout ?? "full", savedClip.aspect_ratio)
+          savedClip.subtitle_position_y ??
+            defaultSubY(
+              effectiveLayout(savedClip.layout ?? "full", savedFacecam(savedClip) !== null),
+              savedClip.aspect_ratio
+            )
         )));
   const hasUnsavedEdits =
     !near(trimStart, savedClip.start_time) ||
     !near(trimEnd, savedClip.end_time) ||
     aspectRatio !== savedClip.aspect_ratio ||
     clipLayout !== (savedClip.layout ?? "full") ||
+    (clipLayout === "gaming" && JSON.stringify(facecam) !== JSON.stringify(savedFacecam(savedClip))) ||
     cropDirty ||
     subtitlesDirty;
 
@@ -276,10 +351,44 @@ export function ClipPreviewModal({
         ? "This clip isn't ready to post (its last render didn't finish)."
         : null;
 
-  const newsActive = newsApplies(clipLayout, aspectRatio);
+  const gamingActive = liveLayout === "gaming";
+  const newsActive = newsApplies(liveLayout, aspectRatio);
+  const canvasLayout = gamingActive || newsActive;
   const box = newsBox(aspectRatio);
-  const previewScale = PREVIEW_WIDTH_PX / (newsActive ? CANVAS_W : ASPECT_RATIO_REF_WIDTH[aspectRatio]);
-  const savedTitleIsHeadline = newsApplies(savedClip.layout ?? "full", savedClip.aspect_ratio);
+  const previewScale = PREVIEW_WIDTH_PX / (canvasLayout ? CANVAS_W : ASPECT_RATIO_REF_WIDTH[aspectRatio]);
+  const savedTitleIsHeadline = newsApplies(
+    effectiveLayout(savedClip.layout ?? "full", savedFacecam(savedClip) !== null),
+    savedClip.aspect_ratio
+  );
+  const gameX = cropOverride ? cropX : 50;
+
+  // The gaming preview: both parts drawn from the (hidden) video every frame, cropped the same way
+  // the render crops them.
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    if (!gamingActive) return;
+    let frame = 0;
+    const draw = () => {
+      const video = videoRef.current;
+      const ctx = canvasRef.current?.getContext("2d");
+      if (video && ctx && video.videoWidth) {
+        const w = video.videoWidth;
+        const h = video.videoHeight;
+        const faceH = (GAMING_PREVIEW_H * GAMING_FACE_H) / CANVAS_H;
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, GAMING_PREVIEW_W, GAMING_PREVIEW_H);
+        if (facecam) {
+          const face = rectIn(w, h, facecam.x, facecam.y, (h * facecam.size) / 100, CANVAS_W / GAMING_FACE_H);
+          ctx.drawImage(video, face.x, face.y, face.w, face.h, 0, 0, GAMING_PREVIEW_W, faceH);
+        }
+        const game = rectIn(w, h, gameX, 50, h, CANVAS_W / GAMING_GAME_H);
+        ctx.drawImage(video, game.x, game.y, game.w, game.h, 0, faceH, GAMING_PREVIEW_W, GAMING_PREVIEW_H - faceH);
+      }
+      frame = requestAnimationFrame(draw);
+    };
+    frame = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(frame);
+  }, [gamingActive, facecam, gameX]);
   const activeCueText = useMemo(() => {
     if (!subtitlesEnabled || !transcript?.segments) return null;
     const cue = transcript.segments.find(
@@ -294,12 +403,14 @@ export function ClipPreviewModal({
         <div className="flex w-64 shrink-0 flex-col gap-2">
           <div
             className="relative w-full overflow-hidden rounded-md bg-black"
-            style={{ aspectRatio: newsActive ? "9/16" : ASPECT_RATIO_CSS[aspectRatio] }}
+            style={{ aspectRatio: canvasLayout ? "9/16" : ASPECT_RATIO_CSS[aspectRatio] }}
           >
-            {/* Same element in both layouts, so switching doesn't reload the video. The real render
-                puts a blurred, darkened copy of the clip behind it; the preview keeps that black. */}
+            {/* Same element in every layout, so switching doesn't reload the video. The real render
+                puts a blurred, darkened copy of the clip behind it; the preview keeps that black.
+                Under the gaming layout the video stays mounted (it drives playback) but hidden, and
+                the canvas below draws the two squares from it. */}
             <div
-              className="absolute inset-x-0"
+              className={`absolute inset-x-0 ${gamingActive ? "opacity-0" : ""}`}
               style={
                 newsActive
                   ? { top: `${(box.top / CANVAS_H) * 100}%`, height: `${(box.height / CANVAS_H) * 100}%` }
@@ -327,6 +438,22 @@ export function ClipPreviewModal({
                 </span>
               )}
             </div>
+            {gamingActive && (
+              <canvas
+                ref={canvasRef}
+                width={GAMING_PREVIEW_W}
+                height={GAMING_PREVIEW_H}
+                className="pointer-events-none absolute inset-0 h-full w-full"
+              />
+            )}
+            {gamingActive && !facecam && (
+              <span
+                className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-center px-4 text-center text-xs text-white/70"
+                style={{ height: `${(GAMING_FACE_H / CANVAS_H) * 100}%` }}
+              >
+                The streamer&apos;s face is found when you save
+              </span>
+            )}
             {newsActive && title.trim() && (
               <div
                 className="pointer-events-none absolute text-center font-bold leading-snug text-white"
@@ -473,16 +600,91 @@ export function ClipPreviewModal({
                   >
                     News: 9:16 with headline
                   </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={clipLayout === "gaming" ? "default" : "outline"}
+                    disabled={applying}
+                    onClick={() => setClipLayout("gaming")}
+                  >
+                    Gaming: face + game
+                  </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {clipLayout === "news" && aspectRatio === "9:16"
-                    ? "A 9:16 clip already fills the screen, so the news layout only changes 1:1, 3:4 and 4:3 clips."
-                    : "News places the clip in the middle of a full-screen 9:16 video, with the title as a headline above it and the subtitles below."}
+                  {clipLayout === "gaming"
+                    ? "Gaming fills the whole 9:16 video: the streamer's face across the top 40% (found automatically, adjustable in the Crop tab) and the game across the bottom 60%. The ratio above only applies if no face is found."
+                    : clipLayout === "news" && aspectRatio === "9:16"
+                      ? "A 9:16 clip already fills the screen, so the news layout only changes 1:1, 3:4 and 4:3 clips."
+                      : "News places the clip in the middle of a full-screen 9:16 video, with the title as a headline above it and the subtitles below."}
                 </p>
               </div>
             )}
 
-            {activeTab === "crop" && (
+            {activeTab === "crop" && clipLayout === "gaming" && (
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium">Streamer&apos;s face (top)</p>
+                  {facecam ? (
+                    <div className="space-y-2 rounded-md bg-muted/50 p-2">
+                      <RangeRow
+                        label="Horizontal position" value={facecam.x} min={0} max={100} disabled={applying}
+                        onChange={(x) => setFacecam({ ...facecam, x })}
+                      />
+                      <RangeRow
+                        label="Vertical position" value={facecam.y} min={0} max={100} disabled={applying}
+                        onChange={(y) => setFacecam({ ...facecam, y })}
+                      />
+                      <RangeRow
+                        label="Size" value={facecam.size} min={10} max={100} disabled={applying}
+                        onChange={(size) => setFacecam({ ...facecam, size })}
+                      />
+                      <Button type="button" size="sm" variant="outline" disabled={applying} onClick={() => setFacecam(null)}>
+                        Find the face again when saving
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2 rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">
+                      <p>
+                        {savedClip.layout === "gaming" && savedFacecam(savedClip) === null
+                          ? "No face was found in this clip, so it uses the News layout. Place the face crop by hand to use the gaming layout."
+                          : "The face is found automatically when you save."}
+                      </p>
+                      <Button
+                        type="button" size="sm" variant="outline" disabled={applying}
+                        onClick={() => setFacecam(DEFAULT_FACECAM)}
+                      >
+                        Place it by hand
+                      </Button>
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium">Game (bottom)</p>
+                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={cropOverride}
+                      onChange={(e) => {
+                        setCropOverride(e.target.checked);
+                        setCropY(50);
+                      }}
+                      disabled={applying}
+                    />
+                    Move the game crop (default: centered)
+                  </label>
+                  {cropOverride && (
+                    <div className="rounded-md bg-muted/50 p-2">
+                      <RangeRow
+                        label="Horizontal position" value={cropX} min={0} max={100} disabled={applying}
+                        onChange={setCropX}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeTab === "crop" && clipLayout !== "gaming" && (
               <div className="space-y-2">
                 <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <input

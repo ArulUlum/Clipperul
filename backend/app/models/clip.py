@@ -42,9 +42,16 @@ class Clip(Base, UUIDPKMixin, TimestampMixin):
     # automatically". Set together or not at all; used when smart-crop picks the wrong subject.
     crop_x: Mapped[float | None] = mapped_column(Float, nullable=True)
     crop_y: Mapped[float | None] = mapped_column(Float, nullable=True)
-    # "full" (the crop fills the frame) or "news" (the crop centered on a 9:16 canvas with the title
-    # as a headline above it — see app/services/video/layout.py). Baked into the plain render.
+    # "full" (the crop fills the frame), "news" (the crop centered on a 9:16 canvas with the title
+    # as a headline above it — app/services/video/layout.py) or "gaming" (a 1:1 facecam crop above a
+    # 1:1 game crop — gaming_layout.py). Baked into the plain render.
     layout: Mapped[str] = mapped_column(String(20), nullable=False, default="full", server_default="full")
+    # The gaming layout's face crop: center (percent of source width/height) and side (percent of
+    # source height). Detected on the first gaming render and kept, or set in the editor; null = not
+    # known (detect on the next render). crop_x positions the game crop under that layout.
+    facecam_x: Mapped[float | None] = mapped_column(Float, nullable=True)
+    facecam_y: Mapped[float | None] = mapped_column(Float, nullable=True)
+    facecam_size: Mapped[float | None] = mapped_column(Float, nullable=True)
     # The clip's CURRENT subtitle configuration — null preset_id means "no subtitles". Distinct
     # from ClipRender's own font_size/position_x/position_y (which record what a past render
     # used); these are what the editor currently has selected and what the next full re-render

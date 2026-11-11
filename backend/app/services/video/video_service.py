@@ -53,6 +53,7 @@ class VideoService:
         file: UploadFile,
         raw_bytes: bytes,
         subtitles_enabled: bool = True,
+        clip_layout: str | None = None,
     ) -> tuple[Video, VideoProcessingJob]:
         validate_upload(file, len(raw_bytes))
 
@@ -77,6 +78,7 @@ class VideoService:
             storage_key=storage_key,
             file_size_bytes=len(raw_bytes),
             subtitles_enabled=subtitles_enabled,
+            clip_layout=clip_layout,
             status=VideoStatus.UPLOADED,
         )
         video = self.video_repo.create(video)

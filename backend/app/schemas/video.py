@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, HttpUrl
 
 from app.models.enums import VideoCategory, VideoStatus
+from app.schemas.clip import ClipLayout
 
 
 class VideoCreateResponse(BaseModel):
@@ -16,6 +17,7 @@ class VideoCreateFromUrlRequest(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     url: HttpUrl
     subtitles_enabled: bool = True
+    clip_layout: ClipLayout = "full"
 
 
 class VideoResponse(BaseModel):

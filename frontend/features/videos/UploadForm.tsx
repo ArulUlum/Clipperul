@@ -8,8 +8,23 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { api, ApiError } from "@/lib/api";
+import type { ClipLayout } from "@/types";
 
 type UploadMode = "file" | "url";
+
+const LAYOUT_OPTIONS: { id: ClipLayout; label: string; hint: string }[] = [
+  { id: "full", label: "Full frame", hint: "The crop fills the whole clip." },
+  {
+    id: "news",
+    label: "News",
+    hint: "The clip in the middle of a full-screen 9:16 video, with its title as a headline above it.",
+  },
+  {
+    id: "gaming",
+    label: "Gaming",
+    hint: "For streams with a facecam: a full-screen 9:16 video with the streamer's face (found automatically) across the top 40% and the game across the bottom 60%. Clips with no face found get the News layout.",
+  },
+];
 
 export function UploadForm() {
   const router = useRouter();
@@ -18,6 +33,7 @@ export function UploadForm() {
   const [file, setFile] = useState<File | null>(null);
   const [url, setUrl] = useState("");
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
+  const [clipLayout, setClipLayout] = useState<ClipLayout>("full");
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,6 +59,7 @@ export function UploadForm() {
         form.append("title", title || file.name);
         form.append("file", file);
         form.append("subtitles_enabled", String(subtitlesEnabled));
+        form.append("clip_layout", clipLayout);
         const res = await api.postForm<{ video_id: string }>("/videos", form);
         videoId = res.video_id;
       } else {
@@ -50,6 +67,7 @@ export function UploadForm() {
           title: title || url,
           url,
           subtitles_enabled: subtitlesEnabled,
+          clip_layout: clipLayout,
         });
         videoId = res.video_id;
       }
@@ -128,8 +146,8 @@ export function UploadForm() {
       )}
 
       <p className="text-xs text-muted-foreground">
-        Clipperul watches the transcript and automatically detects whether this is Gaming or
-        Podcast content, then picks the matching highlight-detection strategy — no need to
+        Clipperul watches the transcript and automatically detects whether this is Gaming, Podcast
+        or News content, then picks the matching highlight-detection strategy — no need to
         choose a category.
       </p>
 
@@ -146,6 +164,28 @@ export function UploadForm() {
         Burns in a style matched to the detected category automatically. You can still change
         the style or remove subtitles per clip afterward.
       </p>
+
+      <div className="space-y-1.5">
+        <Label>Clip layout</Label>
+        <div className="inline-flex rounded-md border border-border p-1">
+          {LAYOUT_OPTIONS.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => setClipLayout(option.id)}
+              className={cn(
+                "rounded px-3 py-1.5 text-sm font-medium transition-colors",
+                clipLayout === option.id ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+              )}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {LAYOUT_OPTIONS.find((o) => o.id === clipLayout)?.hint} You can change it per clip afterward.
+        </p>
+      </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 

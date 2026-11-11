@@ -22,7 +22,7 @@ from app.services.ai.llm import get_llm_provider
 from app.services.ai.title_service import ClipCopy, ClipTitleInput, build_excerpt, generate_clip_copy
 from app.services.ai.transcription import get_transcription_provider
 from app.services.storage.storage_service import storage_service
-from app.services.video import layout, pipeline, smart_crop
+from app.services.video import gaming_layout, layout, pipeline, smart_crop
 from app.services.video.analysis import compute_audio_energy, detect_scene_changes
 from app.services.video.analysis_types import VideoAnalysisInput
 from app.services.video.downloader import download_video_from_url
@@ -225,22 +225,30 @@ def process_video(self, job_id: str) -> None:
             clip_title = (clip_copy.title if clip_copy else None) or _auto_title(highlight.text, highlight.reason, index)
 
             pipeline.trim_clip(original_path, highlight.start, highlight.end, trimmed_local_path)
-            target_w, target_h = pipeline.get_target_dimensions(default_aspect_ratio.value)
-            if video.auto_track:
-                smart_crop.generate_smart_cropped_clip(trimmed_local_path, cropped_local_path, target_w, target_h)
-            else:
-                # Auto-track off: a fixed center crop. The clip also stores it as a manual crop
-                # position below, so later re-renders (trim/ratio edits) don't switch tracking
-                # back on.
-                pipeline.crop_and_scale_positioned(
-                    trimmed_local_path, cropped_local_path, target_w, target_h, 50.0, 50.0
+            # The gaming layout works from the uncropped frame (it crops the face and the game
+            # itself); without a face it falls back to the news layout below.
+            facecam = None
+            if clip_layout == layout.GAMING:
+                clip_local_path = str(Path(tmpdir) / f"clip_{index}.mp4")
+                facecam = gaming_layout.render(trimmed_local_path, clip_local_path, None, None)
+            effective_layout = layout.effective(clip_layout, facecam is not None)
+            if facecam is None:
+                target_w, target_h = pipeline.get_target_dimensions(default_aspect_ratio.value)
+                if video.auto_track:
+                    smart_crop.generate_smart_cropped_clip(trimmed_local_path, cropped_local_path, target_w, target_h)
+                else:
+                    # Auto-track off: a fixed center crop. The clip also stores it as a manual crop
+                    # position below, so later re-renders (trim/ratio edits) don't switch tracking
+                    # back on.
+                    pipeline.crop_and_scale_positioned(
+                        trimmed_local_path, cropped_local_path, target_w, target_h, 50.0, 50.0
+                    )
+                # The plain render: the crop as is, or composed into the news layout.
+                clip_local_path = layout.apply(
+                    effective_layout, cropped_local_path, str(Path(tmpdir) / f"clip_{index}.mp4"),
+                    clip_title, default_aspect_ratio.value,
                 )
-            # The plain render: the crop as is, or composed into the news layout.
-            clip_local_path = layout.apply(
-                clip_layout, cropped_local_path, str(Path(tmpdir) / f"clip_{index}.mp4"),
-                clip_title, default_aspect_ratio.value,
-            )
-            sub_x, sub_y = layout.subtitle_position(clip_layout, default_aspect_ratio.value, None, None)
+            sub_x, sub_y = layout.subtitle_position(effective_layout, default_aspect_ratio.value, None, None)
 
             # Auto-subtitles: burn the category's default preset into the clip that becomes
             # the primary/downloadable version, but keep the plain cut around as a fallback
@@ -301,6 +309,9 @@ def process_video(self, job_id: str) -> None:
                 crop_x=None if video.auto_track else 50.0,
                 crop_y=None if video.auto_track else 50.0,
                 layout=clip_layout,
+                facecam_x=facecam.x if facecam else None,
+                facecam_y=facecam.y if facecam else None,
+                facecam_size=facecam.size if facecam else None,
                 subtitle_preset_id=applied_preset_id,
             )
             db.add(clip)

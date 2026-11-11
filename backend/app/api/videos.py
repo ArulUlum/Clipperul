@@ -13,7 +13,7 @@ from app.models.user import User
 from app.repositories.clip_repository import ClipRepository
 from app.repositories.job_repository import JobRepository
 from app.repositories.video_repository import VideoRepository
-from app.schemas.clip import ClipResponse, build_clip_response
+from app.schemas.clip import ClipLayout, ClipResponse, build_clip_response
 from app.schemas.video import (
     TranscriptResponse,
     VideoCreateFromUrlRequest,
@@ -36,6 +36,7 @@ async def create_video(
     title: str = Form(...),
     file: UploadFile = File(...),
     subtitles_enabled: bool = Form(True),
+    clip_layout: ClipLayout = Form("full"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -49,6 +50,7 @@ async def create_video(
             file=file,
             raw_bytes=raw_bytes,
             subtitles_enabled=subtitles_enabled,
+            clip_layout=clip_layout,
         )
     except PipelineError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message) from exc
@@ -77,6 +79,7 @@ async def create_video_from_url(
             title=payload.title,
             url=str(payload.url),
             subtitles_enabled=payload.subtitles_enabled,
+            clip_layout=payload.clip_layout,
         )
     except PipelineError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.message) from exc

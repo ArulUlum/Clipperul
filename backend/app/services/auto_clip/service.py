@@ -254,8 +254,9 @@ def _launch_from(db: Session, run: AutoClipRun, queue: list[tuple[str, str]], la
                 category=category,  # podcast/gaming/news skip AI detection; other categories get detected
                 clip_aspect_ratio=AspectRatio.SQUARE_1_1,
                 auto_track=False,
-                # The square crop centered on a full-screen 9:16 canvas with the title as headline.
-                clip_layout="news",
+                # Gaming streams: the streamer's face above the game. Everything else (and a gaming
+                # video without a facecam): the square crop on a 9:16 canvas with the title as headline.
+                clip_layout="gaming" if run.category == "gaming" else "news",
             )
         except PipelineError as exc:
             logger.warning("Auto-clip couldn't queue %s: %s", youtube_id, exc.message)
