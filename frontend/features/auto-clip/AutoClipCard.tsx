@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ExternalLink, Play } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
@@ -151,10 +151,7 @@ export function AutoClipCard() {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>Daily auto clip</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-5">
+      <CardContent className="space-y-5 pt-5">
         <p className="text-sm text-muted-foreground">
           Once a day, picks a trending YouTube video in your category (never one it already used), clips it to
           1:1 with auto-track off in the news layout (full-screen 9:16 with the title as a headline), and posts
@@ -165,8 +162,8 @@ export function AutoClipCard() {
         {!settings.can_discover && (
           <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-600 dark:text-amber-400">
             To read trending videos, connect a YouTube account on the{" "}
-            <Link href="/accounts" className="underline">
-              Accounts
+            <Link href="/settings" className="underline">
+              Settings
             </Link>{" "}
             page (or set <code>YOUTUBE_API_KEY</code> on the server).
           </p>

@@ -51,7 +51,7 @@
   (`app/api/social_accounts.py`) and shows as "Coming soon" in the UI: it needs a Meta Developer
   account for `INSTAGRAM_APP_ID`/`INSTAGRAM_APP_SECRET`, which isn't available yet. Flip it back
   on by adding `SocialProvider.INSTAGRAM` to that set once those credentials exist.
-- Accounts page lists connect/disconnect for every implemented provider.
+- Settings page lists connect/disconnect for every implemented provider (the OAuth and Zernio callbacks return to `/settings`).
 - **TikTok and Instagram via Zernio** (`app/services/social/zernio.py`): with `ZERNIO_API_KEY` set,
   connecting them opens Zernio's hosted connect page instead of the native OAuth, and those accounts
   can publish. One Zernio *profile* per user (found by our user id as `externalId`, nothing stored);
@@ -94,7 +94,7 @@
   grid) and per-platform publish analytics.
 
 ## Daily auto clip — done (opt-in, off by default)
-Settings → "Daily auto clip". Once a day (at the user's chosen local time) it picks a trending YouTube
+The Auto clip page (sidebar → "Daily auto clip"). Once a day (at the user's chosen local time) it picks a trending YouTube
 video for the chosen category/country, clips it, and posts the clips to the user's connected accounts.
 - **Discovery** (`app/services/auto_clip/trending.py`): YouTube Data API "most popular" chart per
   category (Gaming, Entertainment, News, ...) or a view-sorted search for Podcast (YouTube has no

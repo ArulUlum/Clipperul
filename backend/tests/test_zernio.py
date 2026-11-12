@@ -144,7 +144,7 @@ def test_pinned_profile_imports_accounts_already_connected_on_zernio(client, db_
 
     response = client.post("/api/social-accounts/instagram/connect", headers=_auth(user))
 
-    assert response.json()["authorization_url"].endswith("/accounts?connected=1&provider=instagram")
+    assert response.json()["authorization_url"].endswith("/settings?connected=1&provider=instagram")
     assert fake.sent("GET", "/accounts")[0]["params"] == {"profileId": "prof_default"}
     assert fake.sent("POST", "/profiles") == [] and fake.sent("GET", "/connect/instagram") == []
     assert {r.provider for r in db_session.query(SocialAccount).filter_by(user_id=user.id)} == {
@@ -215,7 +215,7 @@ def test_callback_syncs_accounts_from_zernio(client, db_session, fake):
     response = _callback(client, user, connected="true", accountId="forged")
 
     assert response.status_code == 307
-    assert response.headers["location"].endswith("/accounts?connected=1&provider=tiktok")
+    assert response.headers["location"].endswith("/settings?connected=1&provider=tiktok")
     rows = db_session.query(SocialAccount).filter_by(user_id=user.id).all()
     assert {(r.provider, r.external_account_id, r.account_name, r.broker) for r in rows} == {
         (SocialProvider.TIKTOK, "acc_tt", "clipper", "zernio"),
@@ -243,14 +243,14 @@ def test_callback_without_a_connected_account_is_an_error(client, db_session, fa
 
     response = _callback(client, user)
 
-    assert response.headers["location"].endswith("/accounts?error=1&provider=tiktok")
+    assert response.headers["location"].endswith("/settings?error=1&provider=tiktok")
 
 
 @pytest.mark.parametrize("extra", [{"error": "oauth_denied"}])
 def test_callback_error_from_zernio_is_an_error(client, db_session, fake, extra):
     user = _user(db_session)
     response = _callback(client, user, **extra)
-    assert response.headers["location"].endswith("/accounts?error=1&provider=tiktok")
+    assert response.headers["location"].endswith("/settings?error=1&provider=tiktok")
     assert fake.calls == []
 
 
@@ -262,7 +262,7 @@ def test_callback_rejects_a_bad_or_foreign_state(client, db_session, fake):
         response = client.get(
             "/api/social-accounts/zernio/callback", params={"state": state, "platform": "tiktok"}
         )
-        assert response.headers["location"].endswith("/accounts?error=1&provider=tiktok")
+        assert response.headers["location"].endswith("/settings?error=1&provider=tiktok")
     assert fake.calls == []
     assert db_session.query(SocialAccount).count() == 0
 

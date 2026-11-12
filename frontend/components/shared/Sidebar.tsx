@@ -8,7 +8,7 @@ import {
   Video,
   Scissors,
   Send,
-  Users,
+  CalendarClock,
   Settings,
   LogOut,
 } from "lucide-react";
@@ -20,7 +20,7 @@ const NAV_ITEMS = [
   { href: "/videos", label: "Videos", icon: Video },
   { href: "/clips", label: "Clips", icon: Scissors },
   { href: "/published", label: "Published", icon: Send },
-  { href: "/accounts", label: "Accounts", icon: Users },
+  { href: "/auto-clip", label: "Auto clip", icon: CalendarClock },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

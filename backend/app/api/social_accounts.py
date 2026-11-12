@@ -107,7 +107,7 @@ def _zernio_connect_url(db: Session, user_id: UUID, provider: SocialProvider) ->
         if settings.ZERNIO_PROFILE_ID:
             imported = zernio.sync_user_accounts(db, user_id)
             if any(a.provider == provider for a in imported):
-                return f"{settings.FRONTEND_URL}/accounts?connected=1&provider={provider.value}"
+                return f"{settings.FRONTEND_URL}/settings?connected=1&provider={provider.value}"
         return zernio.start_connect(zernio.PLATFORMS[provider], zernio.ensure_profile(user_id), callback)
     except (zernio.ZernioError, requests.RequestException) as exc:
         logger.exception("Could not start the Zernio connect flow for user=%s", user_id)
@@ -123,7 +123,7 @@ def zernio_callback(request: Request, db: Session = Depends(get_db)):
     platform = query.get("platform")
     provider = next((p for p in zernio.PLATFORMS if p.value == platform), None)
     label = f"&provider={provider.value}" if provider else ""
-    error_redirect = f"{settings.FRONTEND_URL}/accounts?error=1{label}"
+    error_redirect = f"{settings.FRONTEND_URL}/settings?error=1{label}"
 
     user_id = verify_oauth_state(query.get("state") or "", zernio.BROKER)
     if user_id is None or provider is None or query.get("error"):
@@ -137,7 +137,7 @@ def zernio_callback(request: Request, db: Session = Depends(get_db)):
     if not any(a.provider == provider for a in accounts):
         return RedirectResponse(error_redirect)  # the user backed out before connecting anything
 
-    return RedirectResponse(f"{settings.FRONTEND_URL}/accounts?connected=1{label}")
+    return RedirectResponse(f"{settings.FRONTEND_URL}/settings?connected=1{label}")
 
 
 @router.get("/{provider}/callback")
@@ -148,7 +148,7 @@ def social_account_callback(provider: str, request: Request, db: Session = Depen
     connection. Always ends in a redirect back to the frontend, success or failure, since
     there's no JSON caller waiting on this response — it's the user's browser itself."""
     provider_enum = _parse_provider(provider)
-    error_redirect = f"{settings.FRONTEND_URL}/accounts?error=1&provider={provider_enum.value}"
+    error_redirect = f"{settings.FRONTEND_URL}/settings?error=1&provider={provider_enum.value}"
 
     query = request.query_params
     if query.get("error"):
@@ -204,7 +204,7 @@ def social_account_callback(provider: str, request: Request, db: Session = Depen
         )
     db.commit()
 
-    return RedirectResponse(f"{settings.FRONTEND_URL}/accounts?connected=1&provider={provider_enum.value}")
+    return RedirectResponse(f"{settings.FRONTEND_URL}/settings?connected=1&provider={provider_enum.value}")
 
 
 @router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT)

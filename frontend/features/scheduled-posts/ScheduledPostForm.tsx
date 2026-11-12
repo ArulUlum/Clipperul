@@ -81,8 +81,8 @@ export function ScheduledPostForm({
     return (
       <p className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
         Connect a social account on the{" "}
-        <a href="/accounts" className="text-primary underline">
-          Accounts
+        <a href="/settings" className="text-primary underline">
+          Settings
         </a>{" "}
         page before posting.
       </p>

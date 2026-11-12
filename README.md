@@ -166,7 +166,7 @@ the exact redirect URI each one expects, right above its variables.
 
 ## Daily auto clip (optional)
 
-**Settings → Daily auto clip.** Off by default. Once a day, at the time you choose (in your local
+**Auto clip page (sidebar).** Off by default. Once a day, at the time you choose (in your local
 timezone), it:
 
 1. picks a trending YouTube video for the category and country you selected (Podcast, Gaming,

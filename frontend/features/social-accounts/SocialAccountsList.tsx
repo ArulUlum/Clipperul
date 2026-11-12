@@ -43,10 +43,10 @@ export function SocialAccountsList() {
     if (searchParams.get("connected")) {
       setBanner({ type: "success", text: `${label} connected successfully.` });
       refetch();
-      window.history.replaceState({}, "", "/accounts");
+      window.history.replaceState({}, "", "/settings");
     } else if (searchParams.get("error")) {
       setBanner({ type: "error", text: `Failed to connect ${label}. Please try again.` });
-      window.history.replaceState({}, "", "/accounts");
+      window.history.replaceState({}, "", "/settings");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
