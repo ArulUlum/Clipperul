@@ -142,13 +142,34 @@ def has_credential(db: Session, user_id: UUID) -> bool:
     ) > 0
 
 
-def publishable_accounts(db: Session, user_id: UUID) -> list[SocialAccount]:
+# The platforms a run can post to, in the order the settings show them.
+PLATFORM_LABELS = {"youtube": "YouTube", "tiktok": "TikTok", "instagram": "Instagram"}
+
+
+def publishable_accounts(db: Session, user_id: UUID, platforms: list[str] | None = None) -> list[SocialAccount]:
     """Connected accounts that can actually publish today (YouTube, and TikTok/Instagram accounts
-    connected through Zernio) — others would only produce posts that fail."""
+    connected through Zernio) — others would only produce posts that fail. `platforms` narrows them
+    to the platforms the user chose for the auto clip (None = every platform)."""
     accounts = db.scalars(
         select(SocialAccount).where(SocialAccount.user_id == user_id).order_by(SocialAccount.connected_at)
     ).all()
-    return [a for a in accounts if get_social_provider(a.provider, a.broker).can_publish]
+    return [
+        a for a in accounts
+        if get_social_provider(a.provider, a.broker).can_publish and (platforms is None or a.provider.value in platforms)
+    ]
+
+
+def connected_platforms(db: Session, user_id: UUID) -> list[str]:
+    """The platforms (in PLATFORM_LABELS order) that have at least one account able to post."""
+    have = {a.provider.value for a in publishable_accounts(db, user_id)}
+    return [p for p in PLATFORM_LABELS if p in have]
+
+
+def selected_platforms(st: AutoClipSettings | None, connected: list[str]) -> list[str]:
+    """The platforms a run will post to: what the user chose, minus any no longer connected; every
+    connected one if they never chose."""
+    chosen = st.platforms if st is not None and st.platforms is not None else connected
+    return [p for p in connected if p in chosen]
 
 
 def used_video_ids(db: Session, user_id: UUID) -> set[str]:
@@ -419,7 +440,8 @@ def _build_publish_queue(db: Session, run: AutoClipRun, video: Video) -> list[di
     st = get_settings(db, run.user_id)
     max_clips = st.max_clips if st else DEFAULT_MAX_CLIPS
     clips = [c for c in ClipRepository(db).list_for_video(video.id) if c.status == ClipStatus.READY][:max_clips]
-    accounts = publishable_accounts(db, run.user_id)
+    st = get_settings(db, run.user_id)
+    accounts = publishable_accounts(db, run.user_id, st.platforms if st is not None else None)
     # Clip-major: a clip goes to every account before the next clip starts.
     return [{"clip_id": str(c.id), "account_id": str(a.id)} for c in clips for a in accounts]
 
@@ -435,7 +457,12 @@ def _advance_processing(db: Session, run: AutoClipRun, result: TickResult) -> No
         run.clips_total = len(queue)
         if not queue:
             run.status = "COMPLETED"
-            run.note = "Clips were created, but no connected account can publish — nothing was posted."
+            st = get_settings(db, run.user_id)
+            run.note = (
+                "Clips were created. No platform is selected for posting, so nothing was posted."
+                if st is not None and st.platforms == []
+                else "Clips were created, but no connected account can publish — nothing was posted."
+            )
         else:
             run.status = "PUBLISHING"
         db.commit()

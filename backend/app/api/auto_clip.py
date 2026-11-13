@@ -15,6 +15,7 @@ from app.schemas.auto_clip import (
     AutoClipSettingsResponse,
     AutoClipSettingsUpdate,
     CategoryOption,
+    PlatformOption,
 )
 from app.services.auto_clip import service
 from app.services.auto_clip.trending import CATEGORIES
@@ -24,6 +25,8 @@ router = APIRouter(prefix="/auto-clip", tags=["auto-clip"])
 
 
 def _settings_response(db: Session, user: User, st: AutoClipSettings | None) -> AutoClipSettingsResponse:
+    connected = service.connected_platforms(db, user.id)
+    platforms = service.selected_platforms(st, connected)
     return AutoClipSettingsResponse(
         enabled=st.enabled if st else False,
         category=st.category if st else service.DEFAULT_CATEGORY,
@@ -33,8 +36,12 @@ def _settings_response(db: Session, user: User, st: AutoClipSettings | None) -> 
         max_clips=st.max_clips if st else service.DEFAULT_MAX_CLIPS,
         last_run_date=st.last_run_date if st else None,
         categories=[CategoryOption(id=k, label=v.label) for k, v in CATEGORIES.items()],
+        platforms=platforms,
+        platform_options=[
+            PlatformOption(id=k, label=label, connected=k in connected) for k, label in service.PLATFORM_LABELS.items()
+        ],
         can_discover=service.has_credential(db, user.id),
-        publish_accounts=len(service.publishable_accounts(db, user.id)),
+        publish_accounts=len(service.publishable_accounts(db, user.id, platforms)),
         in_progress=service.has_in_progress_run(db, user.id),
     )
 
@@ -87,6 +94,15 @@ def update_auto_clip_settings(
             detail="Connect a YouTube account (or set YOUTUBE_API_KEY) before turning this on — it's needed to read trending videos.",
         )
 
+    if payload.platforms is not None:
+        connected = service.connected_platforms(db, current_user.id)
+        missing = [p for p in payload.platforms if p not in connected]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Connect {service.PLATFORM_LABELS[missing[0]]} in Settings before choosing it.",
+            )
+
     st = service.get_settings(db, current_user.id)
     was_enabled = bool(st and st.enabled)
     run_time_changed = bool(st and st.run_time != payload.run_time)
@@ -99,6 +115,8 @@ def update_auto_clip_settings(
     st.run_time = payload.run_time
     st.timezone = payload.timezone
     st.max_clips = payload.max_clips
+    if payload.platforms is not None:
+        st.platforms = payload.platforms
 
     # Turning it on (or moving the time) after today's run time has already passed should wait
     # for tomorrow instead of firing a surprise run the moment Save is clicked — "Run now" is

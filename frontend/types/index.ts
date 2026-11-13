@@ -192,6 +192,12 @@ export interface AutoClipCategory {
   label: string;
 }
 
+export interface AutoClipPlatformOption {
+  id: SocialProvider;
+  label: string;
+  connected: boolean; // has an account that can post; if not, it can't be chosen
+}
+
 export interface AutoClipSettings {
   enabled: boolean;
   category: string;
@@ -201,6 +207,9 @@ export interface AutoClipSettings {
   max_clips: number;
   last_run_date: string | null;
   categories: AutoClipCategory[];
+  // Where a run posts (chosen, and still connected), and every platform with whether it can be chosen.
+  platforms: SocialProvider[];
+  platform_options: AutoClipPlatformOption[];
   can_discover: boolean;
   publish_accounts: number;
   in_progress: boolean;

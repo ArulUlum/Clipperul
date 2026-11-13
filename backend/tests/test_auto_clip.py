@@ -711,6 +711,110 @@ def test_api_defaults_when_never_configured(api, mocker):
     assert {"id": "podcast", "label": "Podcast"} in body["categories"]
 
 
+_BODY = {"enabled": False, "category": "podcast", "region": "id", "run_time": "08:00", "timezone": "UTC", "max_clips": 3}
+
+
+def test_api_lists_the_platforms_and_which_are_connected(api, db_session, user):
+    client, headers = api
+    body = client.get("/api/auto-clip", headers=headers).json()
+    assert body["platform_options"] == [
+        {"id": "youtube", "label": "YouTube", "connected": False},
+        {"id": "tiktok", "label": "TikTok", "connected": False},
+        {"id": "instagram", "label": "Instagram", "connected": False},
+    ]
+    assert body["platforms"] == []
+
+    _account(db_session, user, SocialProvider.YOUTUBE, "yt1")
+    _account(db_session, user, SocialProvider.TIKTOK, "tt1", broker="zernio")
+    body = client.get("/api/auto-clip", headers=headers).json()
+    assert [(o["id"], o["connected"]) for o in body["platform_options"]] == [
+        ("youtube", True), ("tiktok", True), ("instagram", False),
+    ]
+    assert body["platforms"] == ["youtube", "tiktok"]  # never chosen: everything that is connected
+    assert body["publish_accounts"] == 2
+
+
+def test_api_saves_the_chosen_platforms_and_they_shape_who_gets_posted_to(api, db_session, user):
+    _account(db_session, user, SocialProvider.YOUTUBE, "yt1")
+    _account(db_session, user, SocialProvider.TIKTOK, "tt1", broker="zernio")
+    _account(db_session, user, SocialProvider.INSTAGRAM, "ig1", broker="zernio")
+    client, headers = api
+
+    body = client.put("/api/auto-clip", headers=headers, json={**_BODY, "platforms": ["instagram", "youtube", "youtube"]}).json()
+
+    assert body["platforms"] == ["youtube", "instagram"]  # de-duplicated, in the settings' order
+    assert body["publish_accounts"] == 2
+    assert client.get("/api/auto-clip", headers=headers).json()["platforms"] == ["youtube", "instagram"]
+    assert {a.provider.value for a in service.publishable_accounts(db_session, user.id, ["youtube", "instagram"])} == {
+        "youtube", "instagram",
+    }
+
+
+def test_api_rejects_a_platform_that_is_not_connected_or_not_known(api, db_session, user):
+    _account(db_session, user, SocialProvider.YOUTUBE, "yt1")
+    client, headers = api
+
+    not_connected = client.put("/api/auto-clip", headers=headers, json={**_BODY, "platforms": ["youtube", "tiktok"]})
+    assert not_connected.status_code == 400 and "Connect TikTok" in not_connected.json()["detail"]
+    assert client.put("/api/auto-clip", headers=headers, json={**_BODY, "platforms": ["facebook"]}).status_code == 422
+    # nothing was saved by the rejected requests
+    assert client.get("/api/auto-clip", headers=headers).json()["platforms"] == ["youtube"]
+
+
+def test_api_leaves_the_choice_alone_when_platforms_is_omitted_and_allows_choosing_none(api, db_session, user):
+    _account(db_session, user, SocialProvider.YOUTUBE, "yt1")
+    _account(db_session, user, SocialProvider.TIKTOK, "tt1", broker="zernio")
+    client, headers = api
+    client.put("/api/auto-clip", headers=headers, json={**_BODY, "platforms": ["tiktok"]})
+
+    assert client.put("/api/auto-clip", headers=headers, json=_BODY).json()["platforms"] == ["tiktok"]
+
+    body = client.put("/api/auto-clip", headers=headers, json={**_BODY, "platforms": []}).json()
+    assert body["platforms"] == [] and body["publish_accounts"] == 0
+
+
+def test_a_chosen_platform_that_gets_disconnected_drops_out_of_the_selection(api, db_session, user):
+    _account(db_session, user, SocialProvider.YOUTUBE, "yt1")
+    tiktok = _account(db_session, user, SocialProvider.TIKTOK, "tt1", broker="zernio")
+    client, headers = api
+    client.put("/api/auto-clip", headers=headers, json={**_BODY, "platforms": ["youtube", "tiktok"]})
+
+    db_session.delete(tiktok)
+    db_session.commit()
+
+    body = client.get("/api/auto-clip", headers=headers).json()
+    assert body["platforms"] == ["youtube"] and body["publish_accounts"] == 1
+
+
+def test_a_run_only_posts_to_the_chosen_platforms(db_session, user):
+    _three_platforms(db_session, user)
+    service.get_settings(db_session, user.id).platforms = ["youtube", "instagram"]
+    db_session.commit()
+
+    result = service.tick(db_session, NOW)
+
+    assert len(result.posts_to_publish) == 2
+    assert _posts_by_platform(db_session) == {"youtube": 1, "instagram": 1}
+
+
+def test_choosing_no_platform_makes_the_clips_and_posts_nothing_and_says_why(db_session, user):
+    run = _three_platforms(db_session, user)
+    service.get_settings(db_session, user.id).platforms = []
+    db_session.commit()
+
+    result = service.tick(db_session, NOW)
+
+    db_session.refresh(run)
+    assert result.posts_to_publish == [] and db_session.query(ScheduledPost).count() == 0
+    assert run.status == "COMPLETED" and "No platform is selected" in run.note
+
+
+def test_a_user_who_never_chose_posts_everywhere_they_are_connected(db_session, user):
+    _three_platforms(db_session, user)
+    assert service.get_settings(db_session, user.id).platforms is None
+    assert len(service.tick(db_session, NOW).posts_to_publish) == 3
+
+
 def test_api_cannot_enable_without_a_way_to_read_trending(api, mocker):
     mocker.patch.object(service.app_settings, "YOUTUBE_API_KEY", None)
     client, headers = api

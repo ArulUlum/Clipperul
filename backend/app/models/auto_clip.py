@@ -29,6 +29,9 @@ class AutoClipSettings(Base, UUIDPKMixin, TimestampMixin):
     max_clips: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     # The user's LOCAL date of the most recent run — what keeps it to once a day.
     last_run_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Which platforms a run posts to — SocialProvider values ("youtube", "tiktok", "instagram"). Null =
+    # never chosen: every connected account that can post. An empty list = none (clips are only made).
+    platforms: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class AutoClipRun(Base, UUIDPKMixin, TimestampMixin):

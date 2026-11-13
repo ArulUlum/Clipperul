@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ExternalLink, Play, Square } from "lucide-react";
+import { ExternalLink, Instagram, Music2, Play, Square, Youtube, type LucideIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -12,7 +12,7 @@ import { Select } from "@/components/ui/select";
 import { api, ApiError } from "@/lib/api";
 import useSWR from "@/lib/useSWR";
 import { formatDate } from "@/lib/utils";
-import type { AutoClipRun, AutoClipRunStatus, AutoClipSettings } from "@/types";
+import type { AutoClipRun, AutoClipRunStatus, AutoClipSettings, SocialProvider } from "@/types";
 
 const IDLE_POLL_MS = 15_000;
 const LIVE_POLL_MS = 4_000;
@@ -27,12 +27,19 @@ const STATUS_BADGE: Record<AutoClipRunStatus, { label: string; variant: "default
   CANCELLED: { label: "Stopped", variant: "muted" },
 };
 
+const PLATFORM_ICONS: Record<SocialProvider, { icon: LucideIcon; className: string }> = {
+  youtube: { icon: Youtube, className: "text-red-600" },
+  tiktok: { icon: Music2, className: "text-foreground" },
+  instagram: { icon: Instagram, className: "text-pink-600" },
+};
+
 interface Form {
   enabled: boolean;
   category: string;
   region: string;
   run_time: string;
   max_clips: number;
+  platforms: SocialProvider[];
 }
 
 function RunRow({ run }: { run: AutoClipRun }) {
@@ -98,6 +105,7 @@ export function AutoClipCard() {
         region: settings.region,
         run_time: settings.run_time,
         max_clips: settings.max_clips,
+        platforms: settings.platforms,
       });
     }
   }, [settings, form]);
@@ -111,6 +119,9 @@ export function AutoClipCard() {
   if (!settings || !form) return null;
 
   const set = <K extends keyof Form>(key: K, value: Form[K]) => setForm({ ...form, [key]: value });
+  const togglePlatform = (id: SocialProvider, checked: boolean) =>
+    set("platforms", checked ? [...form.platforms, id] : form.platforms.filter((p) => p !== id));
+  const connectedPlatforms = settings.platform_options.filter((o) => o.connected).map((o) => o.id);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -120,6 +131,8 @@ export function AutoClipCard() {
     try {
       await api.put<AutoClipSettings>("/auto-clip", {
         ...form,
+        // Only platforms that are still connected can be sent — a stale choice would be rejected.
+        platforms: form.platforms.filter((p) => connectedPlatforms.includes(p)),
         region: form.region.toUpperCase(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
       });
@@ -192,7 +205,7 @@ export function AutoClipCard() {
             page (or set <code>YOUTUBE_API_KEY</code> on the server).
           </p>
         )}
-        {settings.can_discover && settings.publish_accounts === 0 && (
+        {settings.can_discover && connectedPlatforms.length === 0 && (
           <p className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
             No connected account can post yet — clips will still be created, but nothing will be published.
           </p>
@@ -261,6 +274,57 @@ export function AutoClipCard() {
               </p>
             </div>
           </div>
+
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">Post to</legend>
+            <div className="flex flex-wrap gap-3">
+              {settings.platform_options.map((option) => {
+                const { icon: Icon, className } = PLATFORM_ICONS[option.id];
+                const checked = option.connected && form.platforms.includes(option.id);
+                return (
+                  <label
+                    key={option.id}
+                    className={`flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm ${
+                      option.connected ? "cursor-pointer hover:bg-muted" : "cursor-not-allowed opacity-50"
+                    }`}
+                    title={option.connected ? undefined : `Connect ${option.label} in Settings first`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={!option.connected}
+                      onChange={(e) => togglePlatform(option.id, e.target.checked)}
+                      className="h-4 w-4 rounded border-border accent-primary"
+                    />
+                    <Icon className={`h-4 w-4 ${option.connected ? className : "text-muted-foreground"}`} />
+                    {option.label}
+                    {!option.connected && <span className="text-xs text-muted-foreground">Not connected</span>}
+                  </label>
+                );
+              })}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {connectedPlatforms.length === 0 ? (
+                <>
+                  Connect an account on the{" "}
+                  <Link href="/settings" className="underline">
+                    Settings
+                  </Link>{" "}
+                  page to choose where clips are posted.
+                </>
+              ) : form.platforms.filter((p) => connectedPlatforms.includes(p)).length === 0 ? (
+                "No platform selected — clips will still be created, but nothing will be posted."
+              ) : (
+                <>
+                  Platforms that aren&apos;t connected can&apos;t be chosen — connect them on the{" "}
+                  <Link href="/settings" className="underline">
+                    Settings
+                  </Link>{" "}
+                  page.
+                </>
+              )}
+            </p>
+          </fieldset>
 
           {error && <p className="text-sm text-destructive">{error}</p>}
           {notice && <p className="text-sm text-emerald-600 dark:text-emerald-400">{notice}</p>}

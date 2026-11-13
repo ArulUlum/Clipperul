@@ -178,8 +178,8 @@ timezone), it:
    gaining the most views per hour;
 2. clips it to **1:1 with auto-track off** (a fixed center crop) in the **news layout** (full-screen
    9:16 with the title as a headline);
-3. posts the best clips to your connected accounts that can publish (YouTube, plus TikTok/Instagram
-   connected through Zernio) — **one at a time per platform**, waiting a **random 60–90 minutes**
+3. posts the best clips to the platforms you tick under **Post to** (YouTube, TikTok, Instagram — a
+   platform you haven't connected is greyed out; until you choose, every connected one is used) — **one at a time per platform**, waiting a **random 60–90 minutes**
    between uploads to the same platform. Platforms go in parallel, so each clip appears on all of
    them at about the same time. If no connected account can post, the clips are still created and
    nothing is published.

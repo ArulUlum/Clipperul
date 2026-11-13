@@ -133,7 +133,9 @@ video for the chosen category/country, clips it, and posts the clips to the user
   or clear it to detect again); none found = `layout.effective()` renders the clip in the news layout.
   Uploads take a `clip_layout`; auto-clip runs in the Gaming category use this layout.
 - **Publishing:** best-scoring clips first (capped by "max clips per day"), to every connected account
-  that can publish (YouTube, and TikTok/Instagram via Zernio — `SocialMediaProvider.can_publish`),
+  on the platforms chosen in the settings (`auto_clip_settings.platforms`, migration 0022: null = never
+  chosen = all connected, `[]` = none; the API only accepts connected platforms and the page greys the
+  others out) that can publish (YouTube, and TikTok/Instagram via Zernio — `SocialMediaProvider.can_publish`),
   **one upload at a time per platform**: a platform's next upload starts only once its previous post
   is published/failed/cancelled, and then only after a random 60–90 min gap (`PUBLISH_GAP_*` in
   `service.py`). Platforms don't wait for each other, so a clip goes to YouTube, TikTok and Instagram
