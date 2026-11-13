@@ -137,8 +137,12 @@ video for the chosen category/country, clips it, and posts the clips to the user
   chosen = all connected, `[]` = none; the API only accepts connected platforms and the page greys the
   others out) that can publish (YouTube, and TikTok/Instagram via Zernio — `SocialMediaProvider.can_publish`),
   **one upload at a time per platform**: a platform's next upload starts only once its previous post
-  is published/failed/cancelled, and then only after a random 60–90 min gap (`PUBLISH_GAP_*` in
-  `service.py`). Platforms don't wait for each other, so a clip goes to YouTube, TikTok and Instagram
+  is published/failed/cancelled, and then only after the user's chosen wait (`auto_clip_settings.gap_mode/gap_unit/gap_min/gap_max`,
+  migration 0023; defaults random 60–90 min, so nothing changes until it is set): `static` = exactly
+  `gap_min`, `random` = `random.uniform(min, max)` drawn when the gap starts (so a change applies from
+  the next gap); unit is minutes or hours, at most 12 h, a range needs max > min (`service.validate_gap`
+  and the same rule in the form). A long wait stretches how long a run may last before it counts as
+  stuck (`service.max_run_age`: at least 48 h, or 6 h + 7 waits of the longest length). Platforms don't wait for each other, so a clip goes to YouTube, TikTok and Instagram
   together while each platform still sees spaced-out posts (5 clips take ~5 h, not 5 × accounts). The
   deadlines are stored per platform in `auto_clip_runs.next_publish_by_platform`, so restarts don't
   reset them (`next_publish_at`, shown in the UI, is the soonest of them). A platform's first upload

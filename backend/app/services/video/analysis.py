@@ -79,3 +79,27 @@ def detect_scene_changes(video_path: str) -> list[SceneChangePoint]:
 def average_in_range(points: list[AudioEnergyPoint] | list[SceneChangePoint], start: float, end: float) -> float:
     values = [p.energy if isinstance(p, AudioEnergyPoint) else p.magnitude for p in points if start <= p.time <= end]
     return sum(values) / len(values) if values else 0.0
+
+def feature_values_in_range(points, start: float, end: float) -> list[float]:
+    return [
+        p.energy if isinstance(p, AudioEnergyPoint) else p.magnitude
+        for p in points
+        if start <= p.time <= end
+    ]
+
+
+def feature_stats(points, start: float, end: float) -> dict[str, float]:
+    values = feature_values_in_range(points, start, end)
+
+    if not values:
+        return {"mean": 0.0, "peak": 0.0, "p90": 0.0}
+
+    return {
+        "mean": float(np.mean(values)),
+        "peak": float(np.max(values)),
+        "p90": float(np.percentile(values, 90)),
+    }
+
+
+def average_in_range(points, start: float, end: float) -> float:
+    return feature_stats(points, start, end)["mean"]

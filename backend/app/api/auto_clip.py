@@ -40,6 +40,11 @@ def _settings_response(db: Session, user: User, st: AutoClipSettings | None) -> 
         platform_options=[
             PlatformOption(id=k, label=label, connected=k in connected) for k, label in service.PLATFORM_LABELS.items()
         ],
+        gap_mode=st.gap_mode if st else "random",
+        gap_unit=st.gap_unit if st else "minute",
+        gap_min=st.gap_min if st else 60,
+        # A static wait has no upper end: report it equal to the lower one.
+        gap_max=(st.gap_min if st.gap_mode == "static" else st.gap_max) if st else 90,
         can_discover=service.has_credential(db, user.id),
         publish_accounts=len(service.publishable_accounts(db, user.id, platforms)),
         in_progress=service.has_in_progress_run(db, user.id),
@@ -103,6 +108,20 @@ def update_auto_clip_settings(
                 detail=f"Connect {service.PLATFORM_LABELS[missing[0]]} in Settings before choosing it.",
             )
 
+    gap = (payload.gap_mode, payload.gap_unit, payload.gap_min, payload.gap_max)
+    if any(v is not None for v in gap):
+        if payload.gap_mode is None or payload.gap_unit is None or payload.gap_min is None or (
+            payload.gap_mode == "random" and payload.gap_max is None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Give the wait between uploads as a type, a unit and its time(s) together.",
+            )
+        gap_max = payload.gap_min if payload.gap_mode == "static" else payload.gap_max
+        problem = service.validate_gap(payload.gap_mode, payload.gap_unit, payload.gap_min, gap_max)
+        if problem:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=problem)
+
     st = service.get_settings(db, current_user.id)
     was_enabled = bool(st and st.enabled)
     run_time_changed = bool(st and st.run_time != payload.run_time)
@@ -117,6 +136,8 @@ def update_auto_clip_settings(
     st.max_clips = payload.max_clips
     if payload.platforms is not None:
         st.platforms = payload.platforms
+    if payload.gap_mode is not None:
+        st.gap_mode, st.gap_unit, st.gap_min, st.gap_max = payload.gap_mode, payload.gap_unit, payload.gap_min, gap_max
 
     # Turning it on (or moving the time) after today's run time has already passed should wait
     # for tomorrow instead of firing a surprise run the moment Save is clicked — "Run now" is

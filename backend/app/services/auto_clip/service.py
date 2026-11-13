@@ -60,12 +60,14 @@ KEEP_REMAINING = 5
 STARTING_TIMEOUT = timedelta(minutes=10)
 # A run still going after this long is stuck (lost dispatch, dead worker...) — stop it so it can't
 # block every later day, since a new run never starts while one is in progress. Sized to outlast
-# a long run of spaced-out uploads.
+# a long run of spaced-out uploads; a longer chosen wait stretches it (see max_run_age).
 MAX_RUN_AGE = timedelta(hours=48)
-# Gap between one upload and the next on the same platform, picked at random each time so a platform's posts
-# aren't clustered together.
-PUBLISH_GAP_MIN_MINUTES = 60
-PUBLISH_GAP_MAX_MINUTES = 90
+# The wait between one upload and the next on the same platform is the user's choice (static, or a
+# random value in a range, in minutes or hours — see gap_minutes). Spacing posts out and varying the
+# wait keeps a platform's posts from being clustered or looking mechanical.
+GAP_UNIT_MINUTES = {"minute": 1, "hour": 60}
+MAX_GAP_MINUTES = 12 * 60
+MAX_UPLOADS_PER_PLATFORM = 8  # the "max clips per day" ceiling
 DEFAULT_CATEGORY = "podcast"
 DEFAULT_REGION = "ID"
 DEFAULT_RUN_TIME = "08:00"
@@ -120,6 +122,39 @@ def is_due(st: AutoClipSettings, now_utc: datetime) -> bool:
 
 def get_settings(db: Session, user_id: UUID) -> AutoClipSettings | None:
     return db.scalar(select(AutoClipSettings).where(AutoClipSettings.user_id == user_id))
+
+
+def validate_gap(mode: str, unit: str, gap_min: int, gap_max: int) -> str | None:
+    """Why this choice of wait between uploads isn't allowed (None = fine). Numbers are in `unit`."""
+    factor = GAP_UNIT_MINUTES[unit]
+    if mode == "random" and gap_max <= gap_min:
+        return "For a random wait, the longer time must be more than the shorter one."
+    if (gap_max if mode == "random" else gap_min) * factor > MAX_GAP_MINUTES:
+        return f"Uploads can be spaced at most {MAX_GAP_MINUTES // 60} hours apart."
+    return None
+
+
+def gap_range_minutes(st: AutoClipSettings | None) -> tuple[float, float]:
+    """The (shortest, longest) wait between uploads in minutes; equal when it is static."""
+    if st is None:
+        return 60, 90
+    factor = GAP_UNIT_MINUTES.get(st.gap_unit, 1)
+    low = st.gap_min * factor
+    high = low if st.gap_mode == "static" else max(low, st.gap_max * factor)
+    return low, high
+
+
+def pick_gap_minutes(st: AutoClipSettings | None) -> float:
+    low, high = gap_range_minutes(st)
+    return low if low == high else random.uniform(low, high)
+
+
+def max_run_age(st: AutoClipSettings | None) -> timedelta:
+    """How long a run may last before it counts as stuck: MAX_RUN_AGE, or longer when the chosen wait
+    is long enough that a full run of uploads legitimately takes more (6 h to get going + one longest
+    wait between each of the most uploads one platform can get)."""
+    _, high = gap_range_minutes(st)
+    return max(MAX_RUN_AGE, timedelta(hours=6) + timedelta(minutes=high) * (MAX_UPLOADS_PER_PLATFORM - 1))
 
 
 def has_in_progress_run(db: Session, user_id: UUID) -> bool:
@@ -424,7 +459,7 @@ def _expire_stuck_starting(db: Session, now_utc: datetime) -> None:
 
 def _expire_overdue_runs(db: Session, now_utc: datetime) -> None:
     for run in db.scalars(select(AutoClipRun).where(AutoClipRun.status.in_(IN_PROGRESS))).all():
-        if now_utc - _aware(run.created_at) > MAX_RUN_AGE:
+        if now_utc - _aware(run.created_at) > max_run_age(get_settings(db, run.user_id)):
             run.publish_queue, run.next_publish_by_platform = [], {}
             _fail(db, run, "This run took too long and was stopped.")
 
@@ -477,9 +512,10 @@ def _advance_processing(db: Session, run: AutoClipRun, result: TickResult) -> No
 
 def _advance_publishing(db: Session, run: AutoClipRun, result: TickResult, now_utc: datetime) -> None:
     """One upload at a time PER PLATFORM: a platform's next upload starts only once its previous
-    post is PUBLISHED, FAILED or CANCELLED, and then only after a random 60-90 minute gap. Different
-    platforms don't wait for each other, so a clip lands on YouTube, TikTok and Instagram together
-    while each platform still sees spaced-out posts."""
+    post is PUBLISHED, FAILED or CANCELLED, and then only after the user's chosen wait (static, or random
+    within a range — 60-90 minutes unless changed). Different platforms don't wait for each other, so a
+    clip lands on YouTube, TikTok and Instagram together while each platform still sees spaced-out posts."""
+    st = get_settings(db, run.user_id)  # read when a gap starts, so a change applies from the next one
     # Drop what went stale since the queue was built (clip deleted / account disconnected).
     queue: list[tuple[dict, Clip, SocialAccount]] = []
     for item in run.publish_queue:
@@ -507,7 +543,7 @@ def _advance_publishing(db: Session, run: AutoClipRun, result: TickResult, now_u
         # is also the safer thing, e.g. when the platform is rejecting for quota).
         if platform in posted:
             if platform not in deadlines:
-                gap = random.uniform(PUBLISH_GAP_MIN_MINUTES, PUBLISH_GAP_MAX_MINUTES)
+                gap = pick_gap_minutes(st)
                 deadlines[platform] = (now_utc + timedelta(minutes=gap)).isoformat()
                 continue
             if now_utc < datetime.fromisoformat(deadlines[platform]):

@@ -1,5 +1,6 @@
 """The daily auto-clip: trending discovery, the once-a-day schedule, never reusing a link,
 1:1 / no-auto-track output, and uploading one clip at a time."""
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -815,6 +816,62 @@ def test_a_user_who_never_chose_posts_everywhere_they_are_connected(db_session, 
     assert len(service.tick(db_session, NOW).posts_to_publish) == 3
 
 
+def test_api_reports_the_original_wait_by_default(api):
+    client, headers = api
+    body = client.get("/api/auto-clip", headers=headers).json()
+    assert (body["gap_mode"], body["gap_unit"], body["gap_min"], body["gap_max"]) == ("random", "minute", 60, 90)
+
+
+def test_api_saves_a_static_or_random_wait_in_minutes_or_hours(api):
+    client, headers = api
+
+    body = client.put("/api/auto-clip", headers=headers, json={**_BODY, "gap_mode": "static", "gap_unit": "hour", "gap_min": 1}).json()
+    assert (body["gap_mode"], body["gap_unit"], body["gap_min"], body["gap_max"]) == ("static", "hour", 1, 1)
+
+    body = client.put("/api/auto-clip", headers=headers, json={
+        **_BODY, "gap_mode": "random", "gap_unit": "hour", "gap_min": 1, "gap_max": 2,
+    }).json()
+    assert (body["gap_mode"], body["gap_unit"], body["gap_min"], body["gap_max"]) == ("random", "hour", 1, 2)
+    assert client.get("/api/auto-clip", headers=headers).json()["gap_max"] == 2
+
+    # leaving the wait out of a save keeps what was chosen
+    body = client.put("/api/auto-clip", headers=headers, json=_BODY).json()
+    assert (body["gap_mode"], body["gap_unit"], body["gap_min"], body["gap_max"]) == ("random", "hour", 1, 2)
+
+
+@pytest.mark.parametrize(
+    "gap,message",
+    [
+        ({"gap_mode": "random", "gap_unit": "hour", "gap_min": 2, "gap_max": 2}, "longer time must be more"),
+        ({"gap_mode": "random", "gap_unit": "minute", "gap_min": 90, "gap_max": 60}, "longer time must be more"),
+        ({"gap_mode": "static", "gap_unit": "hour", "gap_min": 13}, "at most 12 hours"),
+        ({"gap_mode": "random", "gap_unit": "hour", "gap_min": 1, "gap_max": 13}, "at most 12 hours"),
+        ({"gap_mode": "random", "gap_unit": "hour", "gap_min": 1}, "together"),  # a range needs both ends
+        ({"gap_mode": "static"}, "together"),
+        ({"gap_min": 30}, "together"),
+    ],
+)
+def test_api_rejects_a_wait_that_is_not_allowed_and_saves_nothing(api, gap, message):
+    client, headers = api
+    response = client.put("/api/auto-clip", headers=headers, json={**_BODY, **gap})
+    assert response.status_code == 400 and message in response.json()["detail"]
+    assert client.get("/api/auto-clip", headers=headers).json()["gap_min"] == 60  # untouched
+
+
+@pytest.mark.parametrize(
+    "gap",
+    [
+        {"gap_mode": "sometimes", "gap_unit": "hour", "gap_min": 1},
+        {"gap_mode": "static", "gap_unit": "day", "gap_min": 1},
+        {"gap_mode": "static", "gap_unit": "hour", "gap_min": 0},
+        {"gap_mode": "static", "gap_unit": "hour", "gap_min": 1.5},
+    ],
+)
+def test_api_rejects_nonsense_values(api, gap):
+    client, headers = api
+    assert client.put("/api/auto-clip", headers=headers, json={**_BODY, **gap}).status_code == 422
+
+
 def test_api_cannot_enable_without_a_way_to_read_trending(api, mocker):
     mocker.patch.object(service.app_settings, "YOUTUBE_API_KEY", None)
     client, headers = api
@@ -1027,6 +1084,107 @@ def test_there_is_no_wait_after_the_last_upload(db_session, user, mocker):
     service.tick(db_session, NOW)
     db_session.refresh(run)
     assert run.status == "COMPLETED" and run.next_publish_at is None
+
+
+def _choose_gap(db_session, user, mode, unit, gap_min, gap_max=None):
+    st = service.get_settings(db_session, user.id)
+    st.gap_mode, st.gap_unit, st.gap_min, st.gap_max = mode, unit, gap_min, gap_max or gap_min
+    db_session.commit()
+
+
+def test_a_static_wait_is_exactly_what_was_chosen_with_no_randomness(db_session, user, mocker):
+    mocker.patch.object(service.random, "uniform", side_effect=AssertionError("a static wait is never random"))
+    run = _one_published_then_waiting(db_session, user, mocker)
+    _choose_gap(db_session, user, "static", "hour", 1)
+
+    assert service.tick(db_session, NOW).posts_to_publish == []
+
+    db_session.refresh(run)
+    assert service._aware(run.next_publish_at) == NOW + timedelta(hours=1)
+    assert service.tick(db_session, NOW + timedelta(minutes=59)).posts_to_publish == []
+    assert len(service.tick(db_session, NOW + timedelta(minutes=60)).posts_to_publish) == 1
+
+
+def test_a_static_wait_in_minutes(db_session, user, mocker):
+    run = _one_published_then_waiting(db_session, user, mocker)
+    _choose_gap(db_session, user, "static", "minute", 10, gap_max=999)  # a static wait ignores the upper number
+
+    service.tick(db_session, NOW)
+
+    db_session.refresh(run)
+    assert service._aware(run.next_publish_at) == NOW + timedelta(minutes=10)
+
+
+def test_a_random_wait_in_hours_is_drawn_between_the_two_numbers(db_session, user, mocker):
+    uniform = mocker.patch.object(service.random, "uniform", return_value=95)
+    run = _one_published_then_waiting(db_session, user, mocker)
+    _choose_gap(db_session, user, "random", "hour", 1, 2)
+
+    service.tick(db_session, NOW)
+
+    uniform.assert_called_once_with(60, 120)  # 1-2 hours, in minutes
+    db_session.refresh(run)
+    assert service._aware(run.next_publish_at) == NOW + timedelta(minutes=95)
+
+
+def test_the_original_wait_is_still_random_60_to_90_minutes_until_changed(db_session, user):
+    _settings(db_session, user)
+    st = service.get_settings(db_session, user.id)
+    assert (st.gap_mode, st.gap_unit, st.gap_min, st.gap_max) == ("random", "minute", 60, 90)
+    assert service.gap_range_minutes(st) == (60, 90)
+    assert service.gap_range_minutes(None) == (60, 90)
+
+
+@pytest.mark.parametrize(
+    "mode,unit,low,high,expected",
+    [
+        ("static", "minute", 30, 500, (30, 30)),
+        ("static", "hour", 2, 2, (120, 120)),
+        ("random", "minute", 30, 45, (30, 45)),
+        ("random", "hour", 1, 3, (60, 180)),
+    ],
+)
+def test_gap_range_in_minutes(db_session, user, mode, unit, low, high, expected):
+    _settings(db_session, user)
+    _choose_gap(db_session, user, mode, unit, low, high)
+    assert service.gap_range_minutes(service.get_settings(db_session, user.id)) == expected
+
+
+@pytest.mark.parametrize(
+    "args,ok",
+    [
+        (("static", "hour", 1, 1), True),
+        (("static", "minute", 720, 720), True),  # exactly 12 hours is allowed
+        (("static", "minute", 721, 721), False),
+        (("static", "hour", 13, 13), False),
+        (("random", "hour", 1, 2), True),
+        (("random", "minute", 30, 720), True),
+        (("random", "hour", 2, 2), False),  # a range needs two different numbers
+        (("random", "hour", 3, 2), False),
+        (("random", "hour", 1, 13), False),
+    ],
+)
+def test_validate_gap(args, ok):
+    assert (service.validate_gap(*args) is None) is ok
+
+
+def test_a_long_wait_stretches_how_long_a_run_may_last_before_it_counts_as_stuck(db_session, user):
+    _settings(db_session, user)
+    st = service.get_settings(db_session, user.id)
+    assert service.max_run_age(st) == timedelta(hours=48)  # the default is unchanged
+    _choose_gap(db_session, user, "static", "hour", 12)
+    assert service.max_run_age(st) == timedelta(hours=6 + 12 * 7)
+
+    run = service.create_run(db_session, user.id, "scheduled", "podcast", date(2026, 10, 27))
+    run.status = "PUBLISHING"
+    run.publish_queue = [{"clip_id": str(uuid.uuid4()), "account_id": str(uuid.uuid4())}]
+    run.created_at = NOW - timedelta(hours=60)  # would be "stuck" at the default, not with 12 h waits
+    db_session.commit()
+
+    service.tick(db_session, NOW)
+
+    db_session.refresh(run)
+    assert "too long" not in (run.error or "")
 
 
 def test_the_gap_survives_a_restart(db_session, user, mocker):

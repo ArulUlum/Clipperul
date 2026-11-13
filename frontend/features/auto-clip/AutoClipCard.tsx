@@ -12,7 +12,14 @@ import { Select } from "@/components/ui/select";
 import { api, ApiError } from "@/lib/api";
 import useSWR from "@/lib/useSWR";
 import { formatDate } from "@/lib/utils";
-import type { AutoClipRun, AutoClipRunStatus, AutoClipSettings, SocialProvider } from "@/types";
+import type {
+  AutoClipGapMode,
+  AutoClipGapUnit,
+  AutoClipRun,
+  AutoClipRunStatus,
+  AutoClipSettings,
+  SocialProvider,
+} from "@/types";
 
 const IDLE_POLL_MS = 15_000;
 const LIVE_POLL_MS = 4_000;
@@ -33,6 +40,12 @@ const PLATFORM_ICONS: Record<SocialProvider, { icon: LucideIcon; className: stri
   instagram: { icon: Instagram, className: "text-pink-600" },
 };
 
+// Mirrors the backend (service.GAP_UNIT_MINUTES / MAX_GAP_MINUTES): the API enforces the same rules.
+const UNIT_MINUTES: Record<AutoClipGapUnit, number> = { minute: 1, hour: 60 };
+const MAX_GAP_MINUTES = 12 * 60;
+
+const unitLabel = (n: number, unit: AutoClipGapUnit) => `${unit}${n === 1 ? "" : "s"}`;
+
 interface Form {
   enabled: boolean;
   category: string;
@@ -40,6 +53,21 @@ interface Form {
   run_time: string;
   max_clips: number;
   platforms: SocialProvider[];
+  gap_mode: AutoClipGapMode;
+  gap_unit: AutoClipGapUnit;
+  gap_min: number;
+  gap_max: number;
+}
+
+// Why the chosen wait between uploads can't be saved, or null if it's fine.
+function gapProblem(f: Form): string | null {
+  if (!Number.isInteger(f.gap_min) || f.gap_min < 1) return "Enter a whole number of 1 or more.";
+  if (f.gap_mode === "random" && (!Number.isInteger(f.gap_max) || f.gap_max <= f.gap_min))
+    return "The longer time must be more than the shorter one.";
+  const longest = f.gap_mode === "random" ? f.gap_max : f.gap_min;
+  if (longest * UNIT_MINUTES[f.gap_unit] > MAX_GAP_MINUTES)
+    return `Uploads can be spaced at most ${MAX_GAP_MINUTES / 60} hours apart.`;
+  return null;
 }
 
 function RunRow({ run }: { run: AutoClipRun }) {
@@ -106,6 +134,10 @@ export function AutoClipCard() {
         run_time: settings.run_time,
         max_clips: settings.max_clips,
         platforms: settings.platforms,
+        gap_mode: settings.gap_mode,
+        gap_unit: settings.gap_unit,
+        gap_min: settings.gap_min,
+        gap_max: settings.gap_max,
       });
     }
   }, [settings, form]);
@@ -123,8 +155,34 @@ export function AutoClipCard() {
     set("platforms", checked ? [...form.platforms, id] : form.platforms.filter((p) => p !== id));
   const connectedPlatforms = settings.platform_options.filter((o) => o.connected).map((o) => o.id);
 
+  const gapError = gapProblem(form);
+  const setGapMode = (mode: AutoClipGapMode) =>
+    setForm({
+      ...form,
+      gap_mode: mode,
+      // A range needs two different numbers: start from double the single one.
+      gap_max: mode === "random" && form.gap_max <= form.gap_min ? form.gap_min * 2 : form.gap_max,
+    });
+  const setGapUnit = (unit: AutoClipGapUnit) => {
+    if (unit === form.gap_unit) return;
+    // Keep the same wait when the unit changes (90 minutes -> 2 hours), never below 1.
+    const convert = (n: number) => (unit === "hour" ? Math.max(1, Math.round(n / 60)) : n * 60);
+    const gap_min = convert(form.gap_min);
+    let gap_max = convert(form.gap_max);
+    if (form.gap_mode === "random" && gap_max <= gap_min) gap_max = gap_min + 1;
+    setForm({ ...form, gap_unit: unit, gap_min, gap_max });
+  };
+  const gapSummary =
+    form.gap_mode === "static"
+      ? `Each platform waits exactly ${form.gap_min} ${unitLabel(form.gap_min, form.gap_unit)} after an upload before its next one.`
+      : `Each platform waits a random time between ${form.gap_min} and ${form.gap_max} ${unitLabel(form.gap_max, form.gap_unit)} after an upload before its next one, a new random time each time.`;
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (gapError) {
+      setError(gapError);
+      return;
+    }
     setSaving(true);
     setError(null);
     setNotice(null);
@@ -133,6 +191,7 @@ export function AutoClipCard() {
         ...form,
         // Only platforms that are still connected can be sent — a stale choice would be rejected.
         platforms: form.platforms.filter((p) => connectedPlatforms.includes(p)),
+        gap_max: form.gap_mode === "random" ? form.gap_max : form.gap_min,
         region: form.region.toUpperCase(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
       });
@@ -192,8 +251,8 @@ export function AutoClipCard() {
         <p className="text-sm text-muted-foreground">
           Once a day, picks a trending YouTube video in your category (never one it already used), clips it to
           1:1 with auto-track off in the news layout (full-screen 9:16 with the title as a headline), and posts
-          the clips to your connected accounts one at a time per platform, 60–90 minutes apart (random) so the
-          uploads aren&apos;t bunched together.
+          the clips to your connected accounts one at a time per platform, with the wait you choose below between
+          uploads so they aren&apos;t bunched together.
         </p>
 
         {!settings.can_discover && (
@@ -326,11 +385,76 @@ export function AutoClipCard() {
             </p>
           </fieldset>
 
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">Time between uploads</legend>
+            <div className="inline-flex rounded-md border border-border p-1">
+              {(
+                [
+                  ["static", "Fixed"],
+                  ["random", "Random range"],
+                ] as [AutoClipGapMode, string][]
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setGapMode(mode)}
+                  className={`rounded px-3 py-1.5 text-sm font-medium transition-colors ${
+                    form.gap_mode === mode
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span>{form.gap_mode === "static" ? "Every" : "Between"}</span>
+              <Input
+                aria-label={form.gap_mode === "static" ? "Time between uploads" : "Shortest time between uploads"}
+                type="number"
+                min={1}
+                step={1}
+                value={form.gap_min || ""}
+                onChange={(e) => set("gap_min", Number(e.target.value) || 0)}
+                className="w-24"
+              />
+              {form.gap_mode === "random" && (
+                <>
+                  <span>and</span>
+                  <Input
+                    aria-label="Longest time between uploads"
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={form.gap_max || ""}
+                    onChange={(e) => set("gap_max", Number(e.target.value) || 0)}
+                    className="w-24"
+                  />
+                </>
+              )}
+              <Select
+                aria-label="Unit"
+                value={form.gap_unit}
+                onChange={(e) => setGapUnit(e.target.value as AutoClipGapUnit)}
+                className="w-32"
+              >
+                <option value="minute">minutes</option>
+                <option value="hour">hours</option>
+              </Select>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {gapSummary} Platforms don&apos;t wait for each other, and a platform&apos;s first upload of a run goes
+              out straight away. Up to 12 hours.
+            </p>
+            {gapError && <p className="text-xs text-destructive">{gapError}</p>}
+          </fieldset>
+
           {error && <p className="text-sm text-destructive">{error}</p>}
           {notice && <p className="text-sm text-emerald-600 dark:text-emerald-400">{notice}</p>}
 
           <div className="flex flex-wrap items-center gap-3">
-            <Button type="submit" disabled={saving}>
+            <Button type="submit" disabled={saving || gapError !== null}>
               {saving ? "Saving..." : "Save"}
             </Button>
             <Button

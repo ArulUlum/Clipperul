@@ -32,6 +32,13 @@ class AutoClipSettings(Base, UUIDPKMixin, TimestampMixin):
     # Which platforms a run posts to — SocialProvider values ("youtube", "tiktok", "instagram"). Null =
     # never chosen: every connected account that can post. An empty list = none (clips are only made).
     platforms: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # The wait between one upload and the next on the same platform. "static": always gap_min; "random":
+    # a fresh random value between gap_min and gap_max each time. Both numbers are in gap_unit
+    # ("minute" or "hour"). The defaults are the original fixed behavior: random, 60-90 minutes.
+    gap_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="random", server_default="random")
+    gap_unit: Mapped[str] = mapped_column(String(10), nullable=False, default="minute", server_default="minute")
+    gap_min: Mapped[int] = mapped_column(Integer, nullable=False, default=60, server_default="60")
+    gap_max: Mapped[int] = mapped_column(Integer, nullable=False, default=90, server_default="90")
 
 
 class AutoClipRun(Base, UUIDPKMixin, TimestampMixin):

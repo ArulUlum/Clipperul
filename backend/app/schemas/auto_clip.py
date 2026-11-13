@@ -1,5 +1,6 @@
 import re
 from datetime import date, datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -20,6 +21,12 @@ class AutoClipSettingsUpdate(BaseModel):
     # Platforms to post to; omitted = leave the saved choice alone. Each must be one the user has
     # connected (checked by the endpoint).
     platforms: list[str] | None = None
+    # The wait between uploads on one platform (see AutoClipSettings.gap_*): all four omitted = leave
+    # it alone; otherwise mode, unit and gap_min are required (gap_max too for "random").
+    gap_mode: Literal["static", "random"] | None = None
+    gap_unit: Literal["minute", "hour"] | None = None
+    gap_min: int | None = Field(default=None, ge=1, le=720)
+    gap_max: int | None = Field(default=None, ge=1, le=720)
 
     @field_validator("platforms")
     @classmethod
@@ -75,6 +82,11 @@ class AutoClipSettingsResponse(BaseModel):
     categories: list[CategoryOption]
     platforms: list[str]  # where a run posts (chosen and still connected)
     platform_options: list[PlatformOption]
+    # The wait between uploads on one platform; both numbers are in gap_unit (equal when "static").
+    gap_mode: str
+    gap_unit: str
+    gap_min: int
+    gap_max: int
     # Whether trending can be read (API key or connected YouTube account) / how many connected
     # accounts a run would actually post to / whether a run is happening right now.
     can_discover: bool

@@ -192,6 +192,9 @@ export interface AutoClipCategory {
   label: string;
 }
 
+export type AutoClipGapMode = "static" | "random";
+export type AutoClipGapUnit = "minute" | "hour";
+
 export interface AutoClipPlatformOption {
   id: SocialProvider;
   label: string;
@@ -210,6 +213,11 @@ export interface AutoClipSettings {
   // Where a run posts (chosen, and still connected), and every platform with whether it can be chosen.
   platforms: SocialProvider[];
   platform_options: AutoClipPlatformOption[];
+  // The wait between uploads on one platform; both numbers are in gap_unit (equal when "static").
+  gap_mode: AutoClipGapMode;
+  gap_unit: AutoClipGapUnit;
+  gap_min: number;
+  gap_max: number;
   can_discover: boolean;
   publish_accounts: number;
   in_progress: boolean;
