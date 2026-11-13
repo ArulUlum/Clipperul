@@ -40,9 +40,9 @@ def test_gaming_strategy_rewards_gaming_keywords():
     scores = strategy.compute_heuristic_scores(analysis, analysis.transcript_segments[0].text, 0.0, 30.0)
 
     assert scores["keyword_score"] > 0.0
-    assert set(scores.keys()) == {
-        "speech_energy", "emotion_score", "scene_change_score", "event_score", "keyword_score", "reaction_score",
-    }
+    # every component is a 0-1 measurement of something different; none is derived from another
+    assert set(scores.keys()) == {"audio_excitement", "vocal_reaction", "keyword_score", "scene_activity"}
+    assert all(0.0 <= v <= 1.0 for v in scores.values())
 
 
 def test_podcast_strategy_rewards_opinion_language():
@@ -52,10 +52,11 @@ def test_podcast_strategy_rewards_opinion_language():
     analysis = _analysis_with_text("Honestly, in my opinion, here's the thing nobody talks about.")
     scores = strategy.compute_heuristic_scores(analysis, analysis.transcript_segments[0].text, 0.0, 30.0)
 
-    assert scores["insight_score"] > 0.0
+    assert scores["statement_strength"] > 0.0
     assert set(scores.keys()) == {
-        "insight_score", "emotion_score", "topic_relevance", "statement_strength", "context_score",
+        "statement_strength", "qa_exchange", "content_density", "segment_integrity", "vocal_emphasis",
     }
+    assert all(0.0 <= v <= 1.0 for v in scores.values())
 
 
 def test_news_strategy_prefers_policy_and_critical_talk_over_ceremony():
@@ -73,12 +74,12 @@ def test_news_strategy_prefers_policy_and_critical_talk_over_ceremony():
     bad = strategy.compute_heuristic_scores(b, ceremony, 0.0, 30.0)
 
     assert set(good) == {
-        "direction_score", "critical_score", "buzz_score", "numbers_score", "speech_energy", "substance_score",
+        "announcement_score", "critical_score", "buzz_score", "numbers_score", "substance_score", "vocal_emphasis",
     }
-    assert good["direction_score"] > 0 and good["critical_score"] > 0 and good["numbers_score"] > 0
-    assert bad["direction_score"] == 0 and bad["critical_score"] == 0 and bad["buzz_score"] == 0
+    assert good["announcement_score"] > 0 and good["critical_score"] > 0 and good["numbers_score"] > 0
+    assert bad["announcement_score"] == 0 and bad["critical_score"] == 0 and bad["buzz_score"] == 0
     assert good["substance_score"] > bad["substance_score"]
-    assert sum(good.values()) > sum(bad.values())
+    assert strategy.combine_heuristics(good) > strategy.combine_heuristics(bad)
 
 
 def test_news_strategy_rewards_revelations_from_anyone():

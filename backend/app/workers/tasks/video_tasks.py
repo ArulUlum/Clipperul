@@ -23,7 +23,7 @@ from app.services.ai.title_service import ClipCopy, ClipTitleInput, build_excerp
 from app.services.ai.transcription import get_transcription_provider
 from app.services.storage.storage_service import storage_service
 from app.services.video import gaming_layout, layout, pipeline, smart_crop
-from app.services.video.analysis import compute_audio_energy, detect_scene_changes
+from app.services.video.analysis import SceneAnalysis, analyze_scenes, compute_audio_energy
 from app.services.video.analysis_types import VideoAnalysisInput
 from app.services.video.downloader import download_video_from_url
 from app.services.video.exceptions import PipelineError
@@ -178,20 +178,28 @@ def process_video(self, job_id: str) -> None:
             db.commit()
 
         _emit_status(video, job, db, stage=VideoStatus.ANALYZING, job_status=JobStatus.RUNNING)
-        audio_energy = compute_audio_energy(audio_path)
+        audio_energy = compute_audio_energy(audio_path)  # [] if the audio can't be read: no audio signal
         try:
-            scene_changes = detect_scene_changes(original_path)
+            scenes = analyze_scenes(original_path)
         except Exception:
             # Scene-change rate is one heuristic signal among several — losing it (e.g. an
             # undecodable codec) shouldn't fail the whole video, just weaken that one signal.
             logger.exception("Scene detection failed for video %s; continuing without it", video.id)
-            scene_changes = []
+            scenes = SceneAnalysis(points=[], completed=False, error="scene analysis raised")
+        if not scenes.completed:
+            logger.warning(
+                "Scene analysis for video %s is incomplete (timed_out=%s, analyzed_until=%s, error=%s): "
+                "the scene signal is unknown past that point and is left out of the ranking there",
+                video.id, scenes.timed_out, scenes.analyzed_until, scenes.error,
+            )
         analysis = VideoAnalysisInput(
             video_duration=video.duration_seconds or 0.0,
             transcript_segments=transcription.segments,
             audio_energy=audio_energy,
-            scene_changes=scene_changes,
+            scene_changes=scenes.points,
             language=transcription.language,
+            scene_analysis_complete=scenes.completed,
+            scene_analyzed_until=scenes.analyzed_until,
         )
 
         _emit_status(video, job, db, stage=VideoStatus.FINDING_HIGHLIGHTS, job_status=JobStatus.RUNNING)

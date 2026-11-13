@@ -12,6 +12,28 @@
 - Pipeline: extract audio → Whisper transcript → AI category detection → category-specific AI
   highlight detection → clip generation (center-cropped to true 9:16, never letterboxed) →
   auto subtitle burn-in (opt-out checkbox at upload)
+- Highlight detection (`app/services/ai/categories/*`, `highlight_service.py`, `video/analysis.py`):
+  - Signals are relative within the video: audio energy per second (0-1 against the loudest second; blockwise,
+    8/16/24/32-bit, silent/empty/undecodable audio -> safe) and 1 fps histogram scene changes (0 = the video's
+    median change, 1 = its 99th percentile and above — the raw distances are heavy-tailed, measured on real
+    videos, so the max would squash everything; a static video stays all 0). Scene analysis reports whether it
+    finished (`SceneAnalysis`, `VideoAnalysisInput.scene_analysis_complete/scene_analyzed_until`): past a
+    timeout the scene signal is *unknown* and left out of the ranking, not counted as "no change".
+  - Windows (30 s, stride 15 s) are ranked by a weighted mean of 0-1 components per category
+    (`heuristic_weights`; a component that can't be measured — no transcript, no audio, scenes not analyzed —
+    is omitted and the rest re-weighted), using distinct-cue counts instead of word frequencies and one
+    component per input so nothing is counted twice. Gaming also accepts windows with no transcript when
+    there is an audio/scene signal. Ranking only decides which 20 windows the LLM sees:
+    `select_diverse_candidates` fills most slots best-first without overlap and with a per-section cap, and
+    about 20% from the least-covered sections.
+  - The LLM answers by `candidate_id`; `_validate_highlights` clamps/rejects (unknown ids, non-finite or
+    reversed times, a claim less than half inside its window, scores 0-100, confidence 0-1, duplicates), a
+    highlight can never leave its window, and the three failure kinds are told apart: a valid empty list is
+    trusted, a schema break / API error / unparseable reply / all-rejected list falls back to heuristics
+    (normalized 0-100, confidence 0.3). `select_highlights` validates against the video duration, snaps to
+    transcript boundaries, pads, enforces min/max duration, rejects overlaps and spreads the clips
+    (`HIGHLIGHT_DIVERSITY_*`). Vision is not implemented: `LLM_VISION_ENABLED` (default false) and
+    `LLMProvider.supports_vision` are only the switch a later visual pass would check.
 - AI provider abstraction: OpenAI, Anthropic, Gemini, and local Ollama — swap via `AI_LLM_PROVIDER` env only
 - Clip titles are short, hook-style titles written by the LLM (`app/services/ai/title_service.py`):
   one call per video covers all its clips, in the transcript's own detected language, ≤60 chars, built

@@ -63,6 +63,16 @@ class Settings(BaseSettings):
     OLLAMA_MODEL: str = "llama3.1"
     GEMINI_API_KEY: str | None = None
     GEMINI_MODEL: str = "gemini-3.6-flash"
+    # LLM calls, every provider: the per-request timeout, and how many times the SDK retries a request
+    # that failed for a transient reason (timeout, connection error, 408/409/429/5xx). Errors that
+    # retrying can't fix (400/401/403/404) are never retried.
+    LLM_TIMEOUT_SECONDS: float = 60.0
+    LLM_MAX_RETRIES: int = 2
+    # Extra attempts when a reply arrives but isn't usable JSON (empty or malformed).
+    LLM_JSON_RETRIES: int = 1
+    # Reserved for visual analysis. Nothing sends images to the LLM today whatever this says; it stays
+    # False until the selected route is confirmed to accept image input.
+    LLM_VISION_ENABLED: bool = False
     WHISPER_MODEL: str = "base"
     WHISPER_DEVICE: str = "cpu"
     WHISPER_COMPUTE_TYPE: str = "int8"
@@ -78,6 +88,11 @@ class Settings(BaseSettings):
     # unilaterally deciding what's "worth" including — this threshold does the actual
     # filtering, so weak candidates don't become clips just because the model didn't omit them.
     MIN_HIGHLIGHT_SCORE: float = 40.0
+    # The final selection spreads clips across the video: every already-chosen clip within
+    # HIGHLIGHT_DIVERSITY_RADIUS_SECONDS (centre to centre) lowers a candidate's selection rank by
+    # HIGHLIGHT_DIVERSITY_PENALTY score points. MIN_HIGHLIGHT_SCORE still applies to the raw score.
+    HIGHLIGHT_DIVERSITY_PENALTY: float = 8.0
+    HIGHLIGHT_DIVERSITY_RADIUS_SECONDS: float = 90.0
     # How many candidate windows go into a single LLM scoring call. Smaller/local models
     # (Ollama) lose track partway through a long list and start recycling the same generic
     # reason across several windows instead of describing each one specifically — lowering
