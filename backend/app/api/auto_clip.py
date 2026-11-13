@@ -123,6 +123,16 @@ def run_auto_clip_now(current_user: User = Depends(get_current_user), db: Sessio
     return _run_response(db, run)
 
 
+@router.post("/stop", response_model=AutoClipRunResponse)
+def stop_auto_clip(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Stops the run that is in progress (scheduled or manual). It still counts as that day's run,
+    so the schedule doesn't start another one straight away; "Run now" works again at once."""
+    run = service.cancel_run(db, current_user.id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No auto clip run is in progress.")
+    return _run_response(db, run)
+
+
 @router.get("/runs", response_model=list[AutoClipRunResponse])
 def list_auto_clip_runs(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     runs = db.scalars(

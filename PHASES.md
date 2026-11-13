@@ -143,7 +143,14 @@ video for the chosen category/country, clips it, and posts the clips to the user
   of a run is immediate. No such account = clips are created and nothing is posted.
 - **Engine:** `auto_clip_tick` (beat, every 60 s) moves every run one step from database state, so a
   restart or missed tick loses nothing. Runs stuck >48 h are stopped so they can't block later days.
-  "Run now" starts a run immediately and counts as today's run. Turning the feature off stops scheduled
+  "Run now" starts a run immediately and counts as today's run. **Stop** (`POST /api/auto-clip/stop`,
+`service.cancel_run`) ends the user's in-progress run at any stage: the run row is locked (so it waits
+out a tick on the same run), marked CANCELLED, its queue and deadlines cleared, and its unfinished
+posts (SCHEDULED/PROCESSING/UPLOADING) cancelled with the same conditional UPDATE as cancelling a post
+by hand (clearing `run_token` stops an upload in flight at its next chunk; a post that just published
+stays). `start_run` re-reads the run after its slow network calls so a Stop pressed meanwhile isn't
+undone. A video already being clipped can't be interrupted — its clips still land in the library, but
+the cancelled run never posts them. A stopped run still counts as the day's run. Turning the feature off stops scheduled
   runs in progress.
 - Heads-up: YouTube limits how many videos a Cloud project can upload per day; and re-posting other
   people's videos can violate their copyright and YouTube's terms.

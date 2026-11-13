@@ -185,7 +185,9 @@ timezone), it:
    nothing is published.
 
 It needs a connected YouTube account (its token is used to read the trending list) or a
-`YOUTUBE_API_KEY`. "Run now" starts a run immediately and counts as that day's run. "Max clips per day"
+`YOUTUBE_API_KEY`. "Run now" starts a run immediately and counts as that day's run. "Stop" (shown while a run is in
+progress) ends it at any stage: nothing more is chosen or posted and uploads that haven't finished
+are cancelled; a stopped run still counts as that day's run. "Max clips per day"
 caps how many clips are posted.
 
 **Before you turn it on:** this downloads other people's videos and re-posts clips of them under your

@@ -571,6 +571,112 @@ def test_turning_it_off_stops_a_scheduled_run_but_not_a_manual_one(db_session, u
     assert manual.status == "STARTING"
 
 
+# ----------------------------------------------------------------------------- stop
+
+@pytest.mark.parametrize("stage", ["SELECTING", "STARTING", "PROCESSING", "PUBLISHING"])
+def test_stop_ends_a_run_at_any_stage(db_session, user, stage):
+    _settings(db_session, user)
+    run = service.create_run(db_session, user.id, "manual", "podcast", date(2026, 10, 29))
+    run.status = stage
+    run.publish_queue = [{"clip_id": "c", "account_id": "a"}]
+    run.next_publish_by_platform = {"youtube": (NOW + timedelta(hours=1)).isoformat()}
+    run.remaining_candidates = [{"id": "x" * 11, "title": "T"}]
+    db_session.commit()
+
+    stopped = service.cancel_run(db_session, user.id)
+
+    assert stopped.id == run.id and stopped.status == "CANCELLED"
+    assert stopped.publish_queue == [] and stopped.next_publish_by_platform == {} and stopped.remaining_candidates == []
+    assert stopped.note.startswith("Stopped by you.")
+    assert not service.has_in_progress_run(db_session, user.id)
+
+
+def test_stop_with_nothing_running_does_nothing(db_session, user):
+    done = service.create_run(db_session, user.id, "manual", "podcast", date(2026, 10, 29))
+    done.status = "COMPLETED"
+    db_session.commit()
+    assert service.cancel_run(db_session, user.id) is None
+    db_session.refresh(done)
+    assert done.status == "COMPLETED"  # a finished run is never turned into "stopped"
+
+
+def test_stopping_while_the_video_is_being_clipped_explains_that_its_clips_still_appear(db_session, user):
+    run = _processed_run(db_session, user)
+    assert run.status == "PROCESSING"
+    stopped = service.cancel_run(db_session, user.id)
+    assert "still appear in your library" in stopped.note and "nothing will be posted" in stopped.note
+
+    # when the video later finishes, the stopped run neither queues nor posts anything
+    service.tick(db_session, NOW)
+    db_session.refresh(run)
+    assert run.status == "CANCELLED" and run.publish_queue == []
+    assert db_session.query(ScheduledPost).count() == 0
+
+
+def test_stop_cancels_uploads_that_have_not_finished_but_leaves_published_ones(db_session, user):
+    _three_platforms(db_session, user)
+    service.tick(db_session, NOW)  # one upload released per platform
+    posts = {p.platform.value: p for p in db_session.query(ScheduledPost)}
+    posts["youtube"].status = ScheduledPostStatus.PUBLISHED
+    posts["tiktok"].status, posts["tiktok"].run_token, posts["tiktok"].progress = ScheduledPostStatus.UPLOADING, "tok", 40
+    posts["instagram"].run_token = "tok2"
+    run = db_session.query(AutoClipRun).one()
+    # a post the user scheduled by hand (no run) must not be touched
+    manual = ScheduledPost(
+        clip_id=posts["youtube"].clip_id, social_account_id=posts["youtube"].social_account_id,
+        platform=SocialProvider.YOUTUBE, title="mine", caption="", scheduled_at=NOW + timedelta(days=1),
+        status=ScheduledPostStatus.SCHEDULED, run_token="keep",
+    )
+    db_session.add(manual)
+    db_session.commit()
+
+    service.cancel_run(db_session, user.id)
+
+    for post in db_session.query(ScheduledPost).filter(ScheduledPost.auto_run_id == run.id):
+        db_session.refresh(post)
+    assert posts["youtube"].status == ScheduledPostStatus.PUBLISHED
+    for name in ("tiktok", "instagram"):
+        assert posts[name].status == ScheduledPostStatus.CANCELLED
+        assert posts[name].run_token is None and posts[name].progress == 0  # clearing the token is what stops the worker
+    db_session.refresh(manual)
+    assert manual.status == ScheduledPostStatus.SCHEDULED and manual.run_token == "keep"
+
+    # and nothing further is released afterwards
+    assert service.tick(db_session, NOW + timedelta(hours=3)).posts_to_publish == []
+    assert db_session.query(ScheduledPost).count() == 4
+
+
+def test_a_stop_pressed_while_a_video_is_being_chosen_is_not_undone(db_session, user, mocker, no_dns):
+    _settings(db_session, user)
+    run = service.create_run(db_session, user.id, "manual", "podcast", date(2026, 10, 29))
+    run.status = "STARTING"
+    db_session.commit()
+    mocker.patch.object(service, "get_credentials", return_value=("KEY", None))
+
+    def slow_trending_call(*args, **kwargs):  # Stop is pressed while this is in flight
+        service.cancel_run(db_session, user.id)
+        return [_cand("a" * 11)]
+
+    mocker.patch.object(service, "fetch_candidates", side_effect=slow_trending_call)
+
+    assert service.start_run(db_session, run.id) is None
+    db_session.refresh(run)
+    assert run.status == "CANCELLED"
+    assert db_session.query(Video).count() == 0 and db_session.query(AutoClipSource).count() == 0
+
+
+def test_a_stopped_run_still_counts_as_todays_run_so_the_schedule_does_not_start_another(db_session, user):
+    _settings(db_session, user)
+    service.tick(db_session, NOW)  # 10:00 in Jakarta: today's scheduled run starts
+    assert db_session.query(AutoClipRun).count() == 1
+    service.cancel_run(db_session, user.id)
+
+    service.tick(db_session, NOW + timedelta(minutes=5))
+
+    assert db_session.query(AutoClipRun).count() == 1
+    assert not service.has_in_progress_run(db_session, user.id)  # and "Run now" is free again (see the API test)
+
+
 def test_a_run_stuck_while_choosing_a_video_times_out(db_session, user):
     _settings(db_session, user)
     run = service.create_run(db_session, user.id, "scheduled", "podcast", date(2026, 10, 29))
@@ -691,6 +797,42 @@ def test_run_history_is_private_to_each_user(api, db_session, user):
     db_session.commit()
     client, headers = api
     assert client.get("/api/auto-clip/runs", headers=headers).json() == []
+
+
+def test_api_stop_ends_the_running_run_and_run_now_works_again(api, db_session, user, mocker):
+    _with_key(mocker)
+    mocker.patch("app.api.auto_clip.auto_clip_tick.delay")
+    client, headers = api
+    assert client.post("/api/auto-clip/run", headers=headers).status_code == 202
+    assert client.get("/api/auto-clip", headers=headers).json()["in_progress"] is True
+
+    response = client.post("/api/auto-clip/stop", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "CANCELLED" and body["note"].startswith("Stopped by you.")
+    assert client.get("/api/auto-clip", headers=headers).json()["in_progress"] is False
+    assert client.get("/api/auto-clip/runs", headers=headers).json()[0]["status"] == "CANCELLED"
+    assert client.post("/api/auto-clip/run", headers=headers).status_code == 202  # not blocked by the stopped one
+
+
+def test_api_stop_with_nothing_running_is_a_conflict(api):
+    client, headers = api
+    response = client.post("/api/auto-clip/stop", headers=headers)
+    assert response.status_code == 409 and "No auto clip run" in response.json()["detail"]
+
+
+def test_api_stop_only_touches_your_own_run(api, db_session, user):
+    other = User(email="other@example.com", hashed_password=hash_password("supersecret123"))
+    db_session.add(other)
+    db_session.commit()
+    theirs = service.create_run(db_session, other.id, "manual", "podcast", date(2026, 10, 29))
+    db_session.commit()
+    client, headers = api
+
+    assert client.post("/api/auto-clip/stop", headers=headers).status_code == 409
+    db_session.refresh(theirs)
+    assert theirs.status == "SELECTING"
 
 
 def test_a_run_stuck_for_over_two_days_is_stopped_so_it_cannot_block_later_days(db_session, user):

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ExternalLink, Play } from "lucide-react";
+import { ExternalLink, Play, Square } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -85,6 +85,7 @@ export function AutoClipCard() {
   const [form, setForm] = useState<Form | null>(null);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -130,6 +131,29 @@ export function AutoClipCard() {
       setError(err instanceof ApiError ? err.message : "Failed to save settings.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleStop = async () => {
+    if (
+      !window.confirm(
+        "Stop the current auto clip run? Nothing more will be chosen or posted, and uploads that haven't finished are cancelled. Posts already published stay up."
+      )
+    )
+      return;
+    setStopping(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await api.post("/auto-clip/stop");
+      setNotice("Stopped. Nothing more will be posted from this run.");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to stop the run.");
+    } finally {
+      setStopping(false);
+      // Refresh either way: the run may have finished on its own just before the click.
+      refetchSettings();
+      refetchRuns();
     }
   };
 
@@ -255,6 +279,12 @@ export function AutoClipCard() {
               <Play className="h-3.5 w-3.5" />
               {settings.in_progress ? "Running..." : "Run now"}
             </Button>
+            {settings.in_progress && (
+              <Button type="button" variant="destructive" onClick={handleStop} disabled={stopping}>
+                <Square className="h-3.5 w-3.5 fill-current" />
+                {stopping ? "Stopping..." : "Stop"}
+              </Button>
+            )}
           </div>
         </form>
 

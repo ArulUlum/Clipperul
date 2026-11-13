@@ -14,7 +14,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -213,6 +213,48 @@ def request_manual_run(db: Session, user_id: UUID, now_utc: datetime | None = No
     return run
 
 
+_CANCELLABLE_POST_STATUSES = (
+    ScheduledPostStatus.SCHEDULED, ScheduledPostStatus.PROCESSING, ScheduledPostStatus.UPLOADING,
+)
+
+
+def cancel_run(db: Session, user_id: UUID) -> AutoClipRun | None:
+    """The Stop button: ends the user's run that is in progress, whatever stage it is in. Nothing
+    more is picked, queued or posted, and uploads of this run that haven't finished are cancelled
+    the way a post cancelled by hand is (an upload in flight stops at its next chunk; a post that is
+    already published is left alone). A video that is already being clipped can't be interrupted:
+    its clips still land in the library, but are not posted. Returns None if nothing was running.
+
+    The run row is locked first, so this waits out a tick that is working on the same run — and then
+    sees (and cancels) any posts that tick released."""
+    run = db.scalar(
+        select(AutoClipRun)
+        .where(AutoClipRun.user_id == user_id, AutoClipRun.status.in_(IN_PROGRESS))
+        .order_by(AutoClipRun.created_at.desc())
+        .with_for_update()
+    )
+    if run is None:
+        return None
+    was_processing = run.status == "PROCESSING"
+    run.status = "CANCELLED"
+    run.publish_queue, run.next_publish_by_platform = [], {}
+    run.remaining_candidates = []
+    run.note = "Stopped by you." + (
+        " The video was already being clipped, so its clips will still appear in your library — nothing will be posted."
+        if was_processing else ""
+    )
+    # Same conditional UPDATE as cancelling a post by hand: a post the worker publishes in this very
+    # instant matches no row and stays PUBLISHED. Clearing run_token is what stops the work.
+    db.execute(
+        update(ScheduledPost)
+        .where(ScheduledPost.auto_run_id == run.id, ScheduledPost.status.in_(_CANCELLABLE_POST_STATUSES))
+        .values(status=ScheduledPostStatus.CANCELLED, run_token=None, progress=0)
+    )
+    db.commit()
+    db.refresh(run)
+    return run
+
+
 def _fail(db: Session, run: AutoClipRun, message: str) -> None:
     run.status = "FAILED"
     run.error = message[:2000]
@@ -279,6 +321,11 @@ def _launch_from(db: Session, run: AutoClipRun, queue: list[tuple[str, str]], la
     return None
 
 
+def _stopped_meanwhile(db: Session, run: AutoClipRun) -> bool:
+    db.refresh(run)
+    return run.status != "STARTING"
+
+
 def start_run(db: Session, run_id: UUID) -> str | None:
     """The network step: read today's trending list and start processing the best unused video.
     Returns the processing job id to enqueue, or None (run marked FAILED)."""
@@ -291,7 +338,13 @@ def start_run(db: Session, run_id: UUID) -> str | None:
         api_key, access_token = get_credentials(db, run.user_id)
         candidates = fetch_candidates(run.category, region, api_key=api_key, access_token=access_token)
     except (AutoClipError, TrendingError) as exc:
+        if _stopped_meanwhile(db, run):
+            return None
         _fail(db, run, str(exc))
+        return None
+    # The user may have pressed Stop while those (slow, network) calls were running: a stopped run
+    # must not come back to life by starting a video.
+    if _stopped_meanwhile(db, run):
         return None
 
     usable = filter_candidates(
