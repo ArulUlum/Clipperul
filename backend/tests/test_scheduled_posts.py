@@ -140,7 +140,7 @@ def test_create_scheduled_post_for_two_accounts_at_once(db_session):
 
 
 def test_create_scheduled_post_publish_now_dispatches_immediately(db_session, mocker):
-    delay_mock = mocker.patch("app.api.scheduled_posts.publish_scheduled_post_task.delay")
+    delay_mock = mocker.patch("app.workers.tasks.publish_tasks.publish_scheduled_post_task.delay")
     app.dependency_overrides[deps.get_db] = lambda: db_session
     try:
         user, clip, account, account2 = _setup(db_session)
@@ -537,7 +537,7 @@ def test_cannot_cancel_a_finished_post(db_session, status):
 
 @pytest.mark.parametrize("status", [ScheduledPostStatus.FAILED, ScheduledPostStatus.CANCELLED])
 def test_retry_failed_or_cancelled_post_dispatches_a_fresh_attempt(db_session, mocker, status):
-    delay_mock = mocker.patch("app.api.scheduled_posts.publish_scheduled_post_task.delay")
+    delay_mock = mocker.patch("app.workers.tasks.publish_tasks.publish_scheduled_post_task.delay")
     app.dependency_overrides[deps.get_db] = lambda: db_session
     try:
         user, clip, account, _ = _setup(db_session)
@@ -565,7 +565,7 @@ def test_retry_failed_or_cancelled_post_dispatches_a_fresh_attempt(db_session, m
     [ScheduledPostStatus.SCHEDULED, ScheduledPostStatus.PROCESSING, ScheduledPostStatus.UPLOADING, ScheduledPostStatus.PUBLISHED],
 )
 def test_cannot_retry_a_post_that_is_not_failed_or_cancelled(db_session, mocker, status):
-    delay_mock = mocker.patch("app.api.scheduled_posts.publish_scheduled_post_task.delay")
+    delay_mock = mocker.patch("app.workers.tasks.publish_tasks.publish_scheduled_post_task.delay")
     app.dependency_overrides[deps.get_db] = lambda: db_session
     try:
         user, clip, account, _ = _setup(db_session)
@@ -582,7 +582,7 @@ def test_cannot_retry_a_post_that_is_not_failed_or_cancelled(db_session, mocker,
 
 
 def test_cannot_retry_when_the_clip_has_no_finished_render(db_session, mocker):
-    delay_mock = mocker.patch("app.api.scheduled_posts.publish_scheduled_post_task.delay")
+    delay_mock = mocker.patch("app.workers.tasks.publish_tasks.publish_scheduled_post_task.delay")
     app.dependency_overrides[deps.get_db] = lambda: db_session
     try:
         user, clip, account, _ = _setup(db_session)
@@ -601,7 +601,7 @@ def test_cannot_retry_when_the_clip_has_no_finished_render(db_session, mocker):
 
 
 def test_cannot_retry_or_cancel_someone_elses_post(db_session, mocker):
-    mocker.patch("app.api.scheduled_posts.publish_scheduled_post_task.delay")
+    mocker.patch("app.workers.tasks.publish_tasks.publish_scheduled_post_task.delay")
     app.dependency_overrides[deps.get_db] = lambda: db_session
     try:
         _, clip, account, _ = _setup(db_session)
@@ -620,7 +620,7 @@ def test_cannot_retry_or_cancel_someone_elses_post(db_session, mocker):
 
 
 def test_publish_now_hands_the_worker_the_posts_run_token(db_session, mocker):
-    delay_mock = mocker.patch("app.api.scheduled_posts.publish_scheduled_post_task.delay")
+    delay_mock = mocker.patch("app.workers.tasks.publish_tasks.publish_scheduled_post_task.delay")
     app.dependency_overrides[deps.get_db] = lambda: db_session
     try:
         user, clip, account, _ = _setup(db_session)

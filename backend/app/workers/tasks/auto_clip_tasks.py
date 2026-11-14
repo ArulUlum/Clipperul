@@ -6,7 +6,7 @@ from app.core.db import SessionLocal
 from app.models.auto_clip import AutoClipRun
 from app.services.auto_clip import service
 from app.workers.celery_app import celery_app
-from app.workers.tasks.publish_tasks import publish_scheduled_post_task
+from app.workers.tasks.publish_tasks import enqueue_publish
 from app.workers.tasks.video_tasks import process_video
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ def auto_clip_tick() -> None:
     for job_id in result.jobs_to_process:
         process_video.delay(job_id)
     for post_id, token in result.posts_to_publish:
-        publish_scheduled_post_task.delay(post_id, token)
+        enqueue_publish(post_id, token)
 
 
 @celery_app.task(name="start_auto_clip_run")

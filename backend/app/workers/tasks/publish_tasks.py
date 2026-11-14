@@ -58,7 +58,33 @@ def dispatch_due_scheduled_posts() -> None:
         db.close()
 
     for post_id, token in tokens.items():
-        publish_scheduled_post_task.delay(str(post_id), token)
+        enqueue_publish(post_id, token)
+
+
+def enqueue_publish(post_id, run_token: str) -> bool:
+    """Queues the publish task for a post that was just claimed (PROCESSING). If the broker can't be reached, the
+    post goes back to SCHEDULED and due now, so the next dispatcher tick claims and queues it again — instead of
+    sitting in PROCESSING with no task behind it."""
+    try:
+        publish_scheduled_post_task.delay(str(post_id), run_token)
+        return True
+    except Exception:
+        logger.exception("Could not queue the publish task for scheduled_post=%s; the dispatcher will retry", post_id)
+    db = SessionLocal()
+    try:
+        db.execute(
+            update(ScheduledPost)
+            .where(
+                ScheduledPost.id == UUID(str(post_id)),
+                ScheduledPost.status == ScheduledPostStatus.PROCESSING,
+                ScheduledPost.run_token == run_token,
+            )
+            .values(status=ScheduledPostStatus.SCHEDULED, run_token=None, scheduled_at=datetime.now(timezone.utc))
+        )
+        db.commit()
+    finally:
+        db.close()
+    return False
 
 
 class PublishAborted(Exception):

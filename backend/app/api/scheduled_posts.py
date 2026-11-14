@@ -19,7 +19,7 @@ from app.schemas.scheduled_post import (
     ScheduledPostUpdateRequest,
     build_scheduled_post_response,
 )
-from app.workers.tasks.publish_tasks import publish_scheduled_post_task
+from app.workers.tasks.publish_tasks import enqueue_publish
 
 router = APIRouter(prefix="/scheduled-posts", tags=["scheduled-posts"])
 
@@ -125,7 +125,8 @@ def create_scheduled_post(
             post.run_token = uuid.uuid4().hex
         db.commit()
         for post in posts:
-            publish_scheduled_post_task.delay(str(post.id), post.run_token)
+            if not enqueue_publish(post.id, post.run_token):
+                db.refresh(post)  # back to SCHEDULED: the dispatcher queues it within a minute
 
     return [build_scheduled_post_response(post, clip, account) for post, account in zip(posts, accounts)]
 
@@ -226,6 +227,6 @@ def retry_scheduled_post(post_id: UUID, current_user: User = Depends(get_current
     if result.rowcount == 0:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This post was just changed — refresh and retry")
 
-    publish_scheduled_post_task.delay(str(post.id), token)
+    enqueue_publish(post.id, token)
     db.refresh(post)
     return build_scheduled_post_response(post, clip, social_account)

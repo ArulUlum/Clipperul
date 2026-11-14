@@ -267,6 +267,7 @@ def retrim_clip_task(self, clip_id: str) -> None:
 
         # Old renders point at video content outside the new [start, end] range — drop them
         # and start a fresh render set, the same shape the initial pipeline produces.
+        stale_keys = clip.stored_keys()
         for old_render in list(clip.renders):
             db.delete(old_render)
         db.flush()
@@ -290,6 +291,14 @@ def retrim_clip_task(self, clip_id: str) -> None:
         clip.thumbnail_key = thumb_key
         clip.status = ClipStatus.READY
         db.commit()
+
+        # Only now that the database no longer points at them: files of the replaced renders (but not the
+        # ones just rewritten under the same key). A failed delete leaves an orphan, never a broken clip.
+        for key in stale_keys - {plain_key, primary_key, thumb_key}:
+            try:
+                storage_service.delete(key)
+            except Exception:
+                logger.warning("Could not delete replaced object %s", key, exc_info=True)
 
     except PipelineError as exc:
         logger.exception("Retrim failed for clip %s: %s", clip_id, exc.code)

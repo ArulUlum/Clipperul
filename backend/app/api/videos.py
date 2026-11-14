@@ -171,10 +171,7 @@ def delete_video(video_id: UUID, current_user: User = Depends(get_current_user),
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found")
 
     storage_service.delete(video.storage_key)
-    for clip in video.clips:
-        if clip.storage_key:
-            storage_service.delete(clip.storage_key)
-        if clip.thumbnail_key:
-            storage_service.delete(clip.thumbnail_key)
+    for key in {k for clip in video.clips for k in clip.stored_keys()}:
+        storage_service.delete(key)
 
     video_repo.delete(video)

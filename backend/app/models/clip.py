@@ -65,6 +65,10 @@ class Clip(Base, UUIDPKMixin, TimestampMixin):
 
     video: Mapped["Video"] = relationship(back_populates="clips")
     renders: Mapped[list["ClipRender"]] = relationship(back_populates="clip", cascade="all, delete-orphan")
+
+    def stored_keys(self) -> set[str]:
+        """Every object this clip owns in storage: the active file, its thumbnail and each render."""
+        return {self.storage_key, self.thumbnail_key, *(r.storage_key for r in self.renders)} - {None}
     scheduled_posts: Mapped[list["ScheduledPost"]] = relationship(
         back_populates="clip", cascade="all, delete-orphan"
     )
