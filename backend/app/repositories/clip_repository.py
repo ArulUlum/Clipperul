@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.clip import Clip, ClipRender
@@ -37,10 +37,9 @@ class ClipRepository:
         ).scalar_one_or_none()
 
     def count_for_user(self, user_id: UUID) -> int:
-        rows = self.db.execute(
-            select(Clip).join(Video, Video.id == Clip.video_id).where(Video.user_id == user_id)
-        ).scalars()
-        return len(list(rows))
+        return self.db.execute(
+            select(func.count(Clip.id)).join(Video, Video.id == Clip.video_id).where(Video.user_id == user_id)
+        ).scalar_one()
 
     def update(self, clip: Clip) -> Clip:
         self.db.commit()

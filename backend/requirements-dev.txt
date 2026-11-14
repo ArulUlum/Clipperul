@@ -2,3 +2,5 @@
 pytest==8.3.4
 pytest-mock==3.14.0
 httpx==0.28.1
+# Only for the `monitoring` compose profile (docker compose --profile monitoring up flower).
+flower==2.0.1

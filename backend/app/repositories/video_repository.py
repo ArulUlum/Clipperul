@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.video import Video
@@ -30,7 +30,7 @@ class VideoRepository:
         )
 
     def count_for_user(self, user_id: UUID) -> int:
-        return len(self.list_for_user(user_id))
+        return self.db.execute(select(func.count(Video.id)).where(Video.user_id == user_id)).scalar_one()
 
     def delete(self, video: Video) -> None:
         self.db.delete(video)
@@ -46,9 +46,8 @@ class VideoRepository:
     def count_active_jobs_for_user(self, user_id: UUID) -> int:
         from app.models.enums import JobStatus
 
-        rows = self.db.execute(
-            select(VideoProcessingJob)
+        return self.db.execute(
+            select(func.count(VideoProcessingJob.id))
             .join(Video, Video.id == VideoProcessingJob.video_id)
             .where(Video.user_id == user_id, VideoProcessingJob.status.in_([JobStatus.PENDING, JobStatus.RUNNING]))
-        ).scalars()
-        return len(list(rows))
+        ).scalar_one()
