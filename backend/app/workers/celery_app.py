@@ -23,6 +23,9 @@ celery_app.conf.update(
     task_track_started=True,
     worker_prefetch_multiplier=1,
     task_acks_late=True,
+    # With acks_late, Redis re-sends a task not finished within the visibility timeout (default 1 h). Processing an
+    # hour-plus video on CPU can take longer than that, so it would run a second time alongside the first.
+    broker_transport_options={"visibility_timeout": 6 * 3600},
     # Runs via the `beat` service (see docker-compose.yml) — a single scheduler process that
     # enqueues dispatch_due_scheduled_posts onto the same queue the regular `worker` consumes.
     beat_schedule={

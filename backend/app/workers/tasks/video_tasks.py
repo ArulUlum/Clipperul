@@ -138,6 +138,11 @@ def process_video(self, job_id: str) -> None:
         if video is None:
             logger.error("Video %s not found for job %s", job.video_id, job_id)
             return
+        if video.status == VideoStatus.COMPLETED:
+            # A redelivered task for a video already done (broker re-send, duplicate enqueue): running
+            # again would add a second set of clips and pay the LLM twice.
+            logger.info("Video %s is already processed; skipping job %s", video.id, job_id)
+            return
 
         # Derive the local extension from storage_key (not original_filename — for URL-sourced
         # videos that's the source URL itself, not a filename).

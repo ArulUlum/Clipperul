@@ -1,3 +1,4 @@
+import io
 import mimetypes
 import uuid
 from pathlib import Path
@@ -51,23 +52,25 @@ class VideoService:
         user_id: UUID,
         title: str,
         file: UploadFile,
-        raw_bytes: bytes,
         subtitles_enabled: bool = True,
         clip_layout: str | None = None,
     ) -> tuple[Video, VideoProcessingJob]:
-        validate_upload(file, len(raw_bytes))
+        # The upload is already spooled to disk by the multipart parser: measure it there instead of
+        # reading it into memory, and check the size before anything is stored.
+        file.file.seek(0, io.SEEK_END)
+        size = file.file.tell()
+        file.file.seek(0)
+        validate_upload(file, size)
 
         video_id = uuid.uuid4()
         ext = Path(file.filename or "video.mp4").suffix.lower()
         storage_key = f"videos/{user_id}/{video_id}/original{ext}"
 
-        import io
-
         declared_type = (file.content_type or "").split(";")[0].strip().lower()
         stored_content_type = declared_type if declared_type.startswith("video/") else (
             mimetypes.guess_type(f"x{ext}")[0] or "video/mp4"
         )
-        storage_service.upload_fileobj(io.BytesIO(raw_bytes), storage_key, content_type=stored_content_type)
+        storage_service.upload_fileobj(file.file, storage_key, content_type=stored_content_type)
 
         video = Video(
             id=video_id,
@@ -76,7 +79,7 @@ class VideoService:
             category=None,  # AI-detected during processing — see DETECTING_CATEGORY stage
             original_filename=file.filename or "video.mp4",
             storage_key=storage_key,
-            file_size_bytes=len(raw_bytes),
+            file_size_bytes=size,
             subtitles_enabled=subtitles_enabled,
             clip_layout=clip_layout,
             status=VideoStatus.UPLOADED,

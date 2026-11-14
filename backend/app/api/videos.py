@@ -31,24 +31,21 @@ router = APIRouter(prefix="/videos", tags=["videos"])
 
 @router.post("", response_model=VideoCreateResponse, status_code=status.HTTP_202_ACCEPTED)
 @limiter.limit(settings.RATE_LIMIT_UPLOAD)
-async def create_video(
+def create_video(  # sync on purpose: streaming a large file to storage would otherwise block the event loop
     request: Request,
-    title: str = Form(...),
+    title: str = Form(..., max_length=255),
     file: UploadFile = File(...),
     subtitles_enabled: bool = Form(True),
     clip_layout: ClipLayout = Form("full"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    raw_bytes = await file.read()
-
     service = VideoService(VideoRepository(db), JobRepository(db))
     try:
         video, job = service.create_video_and_job(
             user_id=current_user.id,
             title=title,
             file=file,
-            raw_bytes=raw_bytes,
             subtitles_enabled=subtitles_enabled,
             clip_layout=clip_layout,
         )

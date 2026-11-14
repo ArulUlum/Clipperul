@@ -1,6 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -144,6 +145,15 @@ class Settings(BaseSettings):
     # Rate limiting
     RATE_LIMIT_AUTH: str = "10/minute"
     RATE_LIMIT_UPLOAD: str = "5/minute"
+
+    @model_validator(mode="after")
+    def _real_secrets_in_production(self):
+        # The defaults are public: with them anyone can sign a login token or decrypt stored OAuth tokens.
+        for name in ("JWT_SECRET", "TOKEN_ENCRYPTION_KEY"):
+            value = getattr(self, name)
+            if self.ENV == "production" and (len(value) < 32 or value.startswith("change-me")):
+                raise ValueError(f"{name} must be a real secret (32+ characters, not a default) when ENV=production")
+        return self
 
 
 @lru_cache
