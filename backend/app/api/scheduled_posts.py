@@ -7,11 +7,13 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
+from app.models.clip import Clip
 from app.models.enums import ClipStatus, ScheduledPostStatus
 from app.models.publish_job import PublishJob
 from app.models.scheduled_post import ScheduledPost
 from app.models.social_account import SocialAccount
 from app.models.user import User
+from app.models.video import Video
 from app.repositories.clip_repository import ClipRepository
 from app.schemas.scheduled_post import (
     ScheduledPostCreateRequest,
@@ -24,15 +26,6 @@ from app.workers.tasks.publish_tasks import enqueue_publish
 router = APIRouter(prefix="/scheduled-posts", tags=["scheduled-posts"])
 
 
-def _latest_job(db: Session, scheduled_post_id: UUID) -> PublishJob | None:
-    return db.execute(
-        select(PublishJob)
-        .where(PublishJob.scheduled_post_id == scheduled_post_id)
-        .order_by(PublishJob.created_at.desc())
-        .limit(1)
-    ).scalar_one_or_none()
-
-
 def _get_owned_post(db: Session, post_id: UUID, user_id: UUID) -> ScheduledPost | None:
     return db.execute(
         select(ScheduledPost)
@@ -43,22 +36,30 @@ def _get_owned_post(db: Session, post_id: UUID, user_id: UUID) -> ScheduledPost 
 
 @router.get("", response_model=list[ScheduledPostResponse])
 def list_scheduled_posts(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    posts = db.execute(
-        select(ScheduledPost)
+    # One joined query (posts of this user's accounts whose clip is also theirs), then one for the last error
+    # of the posts that show it — not a few queries per post.
+    rows = db.execute(
+        select(ScheduledPost, Clip, SocialAccount)
         .join(SocialAccount, SocialAccount.id == ScheduledPost.social_account_id)
-        .where(SocialAccount.user_id == current_user.id)
+        .join(Clip, Clip.id == ScheduledPost.clip_id)
+        .join(Video, Video.id == Clip.video_id)
+        .where(SocialAccount.user_id == current_user.id, Video.user_id == current_user.id)
         .order_by(ScheduledPost.scheduled_at)
-    ).scalars().all()
+    ).all()
 
-    responses = []
-    for post in posts:
-        clip = ClipRepository(db).get_for_user(post.clip_id, current_user.id)
-        social_account = db.get(SocialAccount, post.social_account_id)
-        if clip is None or social_account is None:
-            continue
-        latest_job = _latest_job(db, post.id) if post.status in (ScheduledPostStatus.FAILED, ScheduledPostStatus.PROCESSING) else None
-        responses.append(build_scheduled_post_response(post, clip, social_account, latest_job))
-    return responses
+    shows_error = (ScheduledPostStatus.FAILED, ScheduledPostStatus.PROCESSING)
+    wanted = [post.id for post, _, _ in rows if post.status in shows_error]
+    latest_job: dict[UUID, PublishJob] = {}
+    if wanted:
+        for job in db.execute(
+            select(PublishJob).where(PublishJob.scheduled_post_id.in_(wanted)).order_by(PublishJob.created_at.desc())
+        ).scalars():
+            latest_job.setdefault(job.scheduled_post_id, job)  # newest first: the first one seen is the latest
+
+    return [
+        build_scheduled_post_response(post, clip, account, latest_job.get(post.id) if post.status in shows_error else None)
+        for post, clip, account in rows
+    ]
 
 
 @router.post("", response_model=list[ScheduledPostResponse], status_code=status.HTTP_201_CREATED)
