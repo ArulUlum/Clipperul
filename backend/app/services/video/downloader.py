@@ -3,6 +3,7 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.services.video.exceptions import PipelineError
+from app.services.video.url_validation import public_addresses_only
 
 
 def download_video_from_url(url: str, output_path: str) -> None:
@@ -37,9 +38,9 @@ def download_video_from_url(url: str, output_path: str) -> None:
     }
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with public_addresses_only(), yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
-    except yt_dlp.utils.DownloadError as exc:
+    except (yt_dlp.utils.DownloadError, OSError) as exc:  # OSError: e.g. a connection the guard refused
         raise PipelineError("URL_DOWNLOAD_FAILED", f"Could not download video from URL: {exc}") from exc
 
     if not output.exists():
