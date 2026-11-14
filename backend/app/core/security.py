@@ -11,12 +11,18 @@ from jose import JWTError, jwt
 from app.core.config import settings
 
 
+def _bcrypt_input(password: str) -> bytes:
+    # bcrypt reads only the first 72 bytes. Cutting there ourselves keeps existing hashes valid and keeps
+    # newer bcrypt versions (which raise on longer input) from turning a long login attempt into a 500.
+    return password.encode("utf-8")[:72]
+
+
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    return bcrypt.hashpw(_bcrypt_input(password), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(password: str, hashed_password: str) -> bool:
-    return bcrypt.checkpw(password.encode("utf-8"), hashed_password.encode("utf-8"))
+    return bcrypt.checkpw(_bcrypt_input(password), hashed_password.encode("utf-8"))
 
 
 def create_access_token(user_id: UUID) -> str:

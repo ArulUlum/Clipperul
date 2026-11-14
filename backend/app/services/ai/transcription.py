@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from functools import lru_cache
 
 from app.core.config import settings
 
@@ -63,5 +64,6 @@ class WhisperLocalProvider(TranscriptionProvider):
         )
 
 
+@lru_cache(maxsize=1)  # the provider holds the loaded model: one load per worker process, not one per video
 def get_transcription_provider() -> TranscriptionProvider:
     return WhisperLocalProvider()
